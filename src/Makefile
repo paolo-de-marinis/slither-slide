@@ -22,6 +22,8 @@ all: snake.sqfs
 snake: $(OBJECTS)
 	RIVEMU_SDK=$(RIVEMU_SDK) $(RIVEMU) -no-window -sdk -workspace \
 		-exec "gcc *.o -o snake -lriv -lm"
+	RIVEMU_SDK=$(RIVEMU_SDK) $(RIVEMU) -no-window -sdk -workspace \
+		-exec "riv-strip snake"
 
 snake.sqfs: snake songs/gameplay.rivcard
 	RIVEMU_SDK=$(RIVEMU_SDK) $(RIVEMU) -no-window -sdk -workspace \

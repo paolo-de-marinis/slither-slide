@@ -1,202 +1,119 @@
 # Slither Slide code overview
 
-## Scope
+Slither Slide is written as procedural C with separate modules. The program keeps the frame order visible and passes explicit state to the functions that change it.
 
-This document describes the maintained source of the Slither Slide RIVES cartridge. The program is procedural C: state is represented explicitly, modules group related operations and the frame loop makes the update order visible. The decomposition is intended to remain approachable to a reader who knows structures, arrays, functions and separate compilation.
+## Start here
 
-## 1. Module boundaries
+The entry point in `main.c` is short:
 
-The source is divided by responsibility rather than by individual function:
+~~~c
+while (riv_present()) {
+    developerControlsUpdate(&developerControls,
+                            riv->keys[CONTROL_TECHNICAL_VIEW].press);
+    gameUpdate();
+    gameDraw(&developerControls);
+    playBackgroundMusic();
+}
+~~~
 
-| Module | Responsibility |
-|---|---|
-| `main.c` | RIVES dimensions, input tracking, target frame rate and frame loop |
-| `controls.h` | canonical Technical-view and cheat-button mapping |
-| `developer_controls.c` | app-level runtime state for the Technical-view toggle and span selection |
-| `game_state.h` | `GameData`, global constants and the single state declaration |
-| `game.c` | initialization, frame orchestration, optional cheat progression and terminal states |
-| `snake_motion.c` | D-pad input, logical head/tail movement, growth and collection events |
-| `collision.c` | head radius and collision predicates |
-| `body_chain.c` | position-based joint constraints and tangent reconstruction |
-| `scoring.c` | per-level time, persistent scores and JSON outcard |
-| `game_render.c` | HUD, character selection, Technical-view dispatch and ending panels |
-| `levels.c` | level table, completion state, doors, transitions and obstacle declarations |
-| `room_layout.c` | the 4 × 3 room matrix and adjacency relation |
-| `collectible.c` | apple/coin state, spawn and short physics response |
-| `collectible_render.c` | apple and coin primitive rendering |
-| `walls.c` | wall storage, circle/rectangle contacts and wall rendering |
-| `snake_geometry.c` | pure profile construction, periodic B-spline evaluation and sampling |
-| `snake_char.c` | sampled-geometry rasterization, scales, head and tongue |
-| `spline_math.c` | cubic uniform B-spline basis |
-| `technical_view.c` | read-only visualization of the spline construction and parametrization |
-| `caterpillar_char.c` | alternate character renderer |
-| `camera.c` | world-to-screen transformation and eased room transitions |
-| `char_selector.c` | initial skin menu |
-| `audio.c` | effects and the only `SEQT_IMPL` translation unit |
+This order matters. Input is read from the RIVES key state, gameplay advances once, the resulting state is drawn, and the sequenced music is polled last.
 
-The decomposition keeps orchestration, geometry, scoring, stateful object logic and rendering separate while leaving the already focused character, camera, audio and room-layout modules intact.
+The main gameplay state is the global `GameData game` declared in `game.c` and described in `game_state.h`. It contains:
 
-`riv.h` is the preserved RIVES API header; the corresponding upstream file is the official [RIV API header](https://github.com/rives-io/riv/blob/main/libriv/riv.h). `seqt.h` supplies the sequenced-audio implementation. The Makefile compiles every `.c` file separately and links the resulting object files explicitly.
+- logical head, tail and direction data on the tile grid;
+- the floating-point joint chain used for drawing;
+- movement timers and animation state;
+- per-level items, completion flags, elapsed time and score;
+- the current lifecycle state.
 
-## 2. State and invariants
+The four lifecycle states are character selection, active play, game over and completion. `gameUpdate()` handles character selection first, ignores terminal states, and then performs the active-play update in this order:
 
-`GameData` in `game_state.h` owns the state that must persist across modules. Its main groups are:
+1. optional cheat handling;
+2. snake animation;
+3. logical movement and collection;
+4. camera update;
+5. joint-chain constraints;
+6. score and time update;
+7. collectible physics.
 
-- `state` for the four lifecycle states;
-- `headPosition`, `headDirection`, `tailPosition` and `bodyDirections` for the logical grid snake;
-- `joints` and `jointCount` for the continuous-looking body;
-- `moveTimer`, `moveDelay` and `growthRate` for level-dependent movement;
-- `levelItems`, `levelScores`, `levelElapsedTicks` and `levelCompleted` for persistent progress;
-- `snakeAnimation` and `collectibleRotation` for visual animation.
+An early return stops the remainder of the frame when a collision, completion or initialization failure changes the game state.
 
-The implementation maintains the following invariants:
+## Logical movement
 
-1. `headPosition` and `tailPosition` are world-grid coordinates, whereas joint coordinates are world-space pixels.
-2. `bodyDirections[y][x]` stores the direction that the tail must follow when it reaches an occupied tile.
-3. After `bodyChainUpdate()`, `joints[0]` coincides exactly with the center of the logical head tile.
-4. Joint angles are recomputed from the final corrected chain, not from an intermediate solver state.
-5. A completed level has a final score, a frozen elapsed time and no collectible.
-6. A completion bonus is incorporated exactly once into that level's stored score.
+`snake_motion.c` owns the tile-grid part of the snake:
 
-The single global `game` object is declared in `game_state.h` and defined in `game.c`. Computational modules receive a `GameData *` or `const GameData *` when operating on it; this keeps data flow explicit even though the cartridge has only one game instance. `DeveloperControls` is owned separately by `main()` and contains the Technical-view toggle plus its manual span-selection state. Neither `developer_controls.c` nor `technical_view.c` receives a `GameData *`, so the view cannot mutate gameplay or outcard state.
+- `readDirectionInput()` rejects an immediate reversal;
+- `moveTail()` follows `bodyDirections` and clears the old tail cell;
+- `snakeMotionUpdate()` checks the next head position, moves the head and processes collection;
+- `snakeCollectItem()` updates room progress and grows the body.
 
-## 3. Frame flow
+The grid makes movement and room transitions discrete. The joint chain is a separate visual layer and never replaces the logical position used by the rules.
 
-Execution starts in `main.c`:
+## Rooms, walls and doors
 
-1. configure the 256 × 256 output and 60 FPS target;
-2. initialize audio, the game and the disabled-by-default developer-control state;
-3. for each successful `riv_present()`, update the D/R1 toggle, then call `gameUpdate()`, `gameDraw()` and `playBackgroundMusic()`.
+The twelve levels occupy a 4 × 3 matrix in `room_layout.c`. `levels.c` stores level requirements and builds the walls and obstacles for the current room.
 
-During the selection screen, `gameUpdate()` delegates to `updateSkinSelection()`. During play, one frame performs:
+The outer boundary is divided into segments. Opening a door means removing the corresponding segments on the two adjacent sides. `canTraverseLevels()` permits a transition when the levels are adjacent and the room being left is complete.
 
-1. advance the global tick count;
-2. process the optional cheat level skip when `CHEATS_ENABLED=1`;
-3. advance tongue animation for the snake skin;
-4. read input and, when the movement timer expires, move the logical snake;
-5. update the camera;
-6. solve the body-chain constraints and recompute tangents;
-7. update the active level score and the outcard;
-8. integrate collectible physics and test body interaction.
+`collision.c` checks a proposed head position against:
 
-Rendering is kept in `game_render.c`. It clears the frame, draws the current walls, then draws either the selection menu or the HUD, collectible and character. When the snake skin and Technical view are active, it passes the renderer's current `SnakeGeometry` to `technicalViewDraw()`. Ending panels are overlays on the last game frame.
+- world and room boundaries;
+- the wall rectangles currently stored by `walls.c`;
+- sampled segments of the body chain.
 
-## 4. Logical movement and continuous geometry
+The head radius is the original skin-independent value, `8.0f * 0.67f`. The level-2 square obstacle is tested against the same inset rectangle that is drawn.
 
-The cartridge deliberately uses two body representations:
+## From joints to the visible snake
 
-- the grid map `bodyDirections`, which gives deterministic head and tail movement;
-- the floating-point joint chain, which supports a curved body, rendering and approximate physical interaction.
+The geometry path is split into three steps.
 
-`snakeMotionUpdate()` rejects an immediate 180-degree reversal, waits for the level-specific delay, constructs the next head tile and asks `collisionAtNextHead()` whether the move is admissible. If no item is collected, `moveTail()` clears the old tail tile and follows its stored direction. On collection, `bodyChainGrow()` duplicates the last joint and the tail stays still for that move.
+### 1. Joint constraints
 
-`bodyChainUpdate()` treats the logical head as a boundary condition. It first anchors joint zero, then applies follower spacing, non-neighbour overlap resolution and wall corrections to the remaining chain. It anchors joint zero again after those corrections and finally recomputes every angle from the resulting geometry. The direct overlap pass is quadratic in the joint count; current playable lengths make the simple implementation preferable to a spatial index.
+`body_chain.c` pins the first joint to the logical head, lets each following joint approach the previous one, separates distant non-neighbouring joints when they overlap and pushes the chain out of walls. The head is pinned again before the final tangent pass, so every stored angle is computed from the corrected positions.
 
-The mathematical construction of the profile and spline is developed separately in [Mathematics of the procedural body](b-spline.md). `snakeGeometryBuild()` is the single construction path: both ordinary rasterization and the Technical view consume its control-point and sample arrays.
+### 2. B-spline samples
 
-## 5. Collision geometry
+`snake_geometry.c` builds the outline controls from left and right offsets around the joints. It then evaluates every periodic cubic span at two parameters. `spline_math.c` contains only the four basis weights.
 
-`collisionAtNextHead()` combines three predicates:
+The resulting `SnakeGeometry` contains:
 
-- a circle against the current room boundary, with exceptions only in traversable door intervals;
-- a circle against each non-empty axis-aligned wall rectangle;
-- a circle against five uniformly spaced points on each sufficiently distant body segment.
+- the complete closed control polygon;
+- the two samples per span consumed by the renderer.
 
-`collisionHeadRadius()` returns the skin-independent historical gameplay radius `8 × 0.67 = 5.36` pixels. The same value is used for movement collision and collection distance. Keeping visual skin dimensions separate from this logical radius prevents a cosmetic choice from changing level clearance. The visible decoration may extend beyond the logical radius; the collision surface is intentionally simpler and slightly more forgiving than the rendered surface. Interior-obstacle head tests use the same one-pixel inset rectangle that `wallsDraw()` fills, so the level-2 cube cannot trigger against an invisible outer pixel. Boundary-wall handling is unchanged.
+### 3. Drawing
 
-`wallCircleContact()` centralizes the closest-point calculation used by head collision, body correction, spawn exclusion and collectible physics. This avoids four separate versions of the same circle/rectangle predicate.
+`snake_char.c` pairs samples from the two sides and fills each strip with two triangles. The head, tongue and scale marks are added afterwards. The geometry buffers are static because they are reused every frame and are too large to allocate repeatedly on the stack.
 
-## 6. Levels, completion and backtracking
+The caterpillar follows the same joint chain but has its own simpler renderer in `caterpillar_char.c`.
 
-The room matrix is
+## Technical view
 
-```text
- 1   2  11  10
- 4   3  12   9
- 5   6   7   8
-```
+`developer_controls.c` stores only the toggle and active-span selection. This state is deliberately separate from `GameData` because it belongs to the explanatory interface rather than to the run.
 
-Consecutive level numbers are adjacent in this matrix. `canTraverseLevels()` permits a forward move only after the current room is complete and always permits a move to the immediately preceding room.
+`technical_view.c` receives const pointers to the live joints and `SnakeGeometry`. It draws the chain, all controls, the selected four-control window, renderer samples and the moving point $C_i(t)$. It cannot change movement, collision, score, timers, RNG or outcard data.
 
-`initializeLevel()` loads movement parameters, builds boundary walls and obstacles, opens currently available doors and starts or resumes that level's clock. For an incomplete level it generates one collectible. For a completed level it explicitly hides the collectible; revisiting the room therefore consumes no RIVES entropy and cannot change its result.
+The selected span advances automatically until the first A/F or L2/R2 press. Manual navigation then moves the window by one control point and wraps around the current polygon.
 
-`checkDoorState()` is the completion transaction:
+## Collectibles and score
 
-1. verify that the configured item requirement has been reached;
-2. mark the room complete exactly once;
-3. finalize its time and score, including the completion bonus;
-4. hide the collectible;
-5. open traversable doors and play the door sound.
+`collectible.c` keeps the current apple or coin, handles its short bounce response and finds a legal spawn position. Spawn candidates must avoid walls, the HUD, corners, the existing body and the extra coin margin. The scan order is fixed because changing it would also change deterministic RIVES entropy consumption.
 
-The final required item is rendered as a coin. In rooms 1–11, collecting it completes the room without spawning another object. In room 12, the same ordinary completion path is followed and `gameComplete()` then enters the final state. A failed spawn is not ignored: it ends the run instead of leaving an invisible objective.
+`scoring.c` records active time by level. A completed room keeps its result, so revisiting it does not restart its timer or create another item. The JSON outcard contains the total score, collected items, body length, total time and compact per-level data.
 
-Backtracking preserves item counts, scores, elapsed ticks and completion flags. An incomplete level's clock is paused when the player leaves it and resumes on return; completed scores and times remain frozen. Seconds are derived from the integer tick counts when the score or outcard is produced, so there is no second mutable time representation.
+## Rendering and audio
 
-## 7. Score model
+`game_render.c` draws the world before the HUD and character. The Technical view is drawn only for the snake skin. Game-over and completion panels are terminal overlays.
 
-For level $r$, let
+`audio.c` is the only translation unit that defines `SEQT_IMPL`. It owns the background sequencer and exposes small functions for the sound effects used by the gameplay modules.
 
-- $a_r$ be the number of collected items;
-- $n_r$ be the snake length when room $r$ is evaluated, frozen on completion;
-- $\tau_r$ be active time in that level, in seconds;
-- $B_r$ be the configured completion bonus, or zero before completion.
+## Build flags
 
-The stored level score is
+`DEBUG_MODE` and `CHEATS_ENABLED` are independent and default to zero:
 
-```math
-S_r = 2M a_r - (n_r-n_0) - \lfloor 2\tau_r\rfloor + B_r,
-```
+- debug mode adds diagnostics;
+- cheats enable R/R3 level advancement through the ordinary completion path;
+- the Technical view is available in the normal build and does not depend on either flag.
 
-where $M=42$ is `MAP_SIZE` and $n_0=20$ is `INITIAL_SNAKE_LENGTH`. The total score is
+## Tests
 
-```math
-S=\sum_{r=1}^{12}S_r.
-```
-
-Only active time in the current incomplete room contributes to $\tau_r$. `scoringCompleteLevel()` first captures the final elapsed interval, computes the non-bonus part with that room's current length $n_r$ and then adds $B_r$ before freezing the result. `scoringUpdate()` may therefore recompute an incomplete room, but it cannot overwrite a completed room's bonus. A room not yet entered contributes zero rather than evaluating the formula with a fictitious length or time.
-
-The outcard reports total score, total items, current length, total run time, current room and the per-room tuple `[items, completed, score, time]`.
-
-## 8. Deterministic collectible generation
-
-`collectibleSpawn()` enumerates candidate cells in a fixed row-major order. It excludes:
-
-- the HUD footprint and corner buffers;
-- a larger edge margin for the coin;
-- wall contacts with two pixels of clearance;
-- positions close to any body joint.
-
-It then makes one `riv_rand_uint()` call to choose an index. The scan order is intentionally documented beside the loop because changing it changes the chosen cell for the same RIVES entropy. Completed-room visits make no random call.
-
-When the body profile touches the object, the object receives a short normal impulse. Velocity is damped every frame, reflected at room bounds and wall contacts, and set to zero below a fixed threshold.
-
-## 9. Technical view, diagnostics and cheats
-
-The runtime Technical view is compiled into the normal cartridge, starts disabled and toggles with D/R1. It is restricted to the snake skin and shows:
-
-- the center-chain joints;
-- every lateral profile control in light blue and their closed control polygon;
-- the resulting B-spline and every renderer sample at $t=0$ and $t=0.5$;
-- four orange rings around only the controls $P_i,\ldots,P_{i+3}$ of the active span, its point $C_i(t)$ and the four basis weights.
-
-Its data flow is read-only and stops at drawing calls. The animation parameter is derived from `riv->frame`; it does not consume RIVES entropy or update `GameData`. Automatic span selection continues until the first A/F or L2/R2 press. Manual navigation changes $i$ by exactly one in either direction and wraps against the live `controlPointCount`, including when growth changes that count.
-
-`DEBUG_MODE` separately enables collision, lifecycle and music logging. `CHEATS_ENABLED` separately makes R/R3 complete the current level through `checkDoorState()` and enter the next room through `initializeLevel()`; at level 12 it calls `gameComplete()`. The cheat therefore exercises the same completion, score and door operations as normal collection, but neither compile-time flag controls the Technical view.
-
-## 10. RIVES integration
-
-- `riv_present()` advances the fixed-rate frame loop and input state;
-- `riv->keys` exposes gamepad transitions;
-- `riv_draw_*` and `riv_clear()` render primitives and text;
-- `riv_rand_uint()` selects a deterministic spawn candidate;
-- `riv_waveform()` produces effects and `seqt_poll()` advances music;
-- `riv_snprintf()` and `riv->outcard` publish results;
-- `riv->quit_frame` schedules exit after game over or completion.
-
-## 11. Remaining limits
-
-- Diagnostics and cheats are selected independently at build time; the Technical view is a runtime toggle.
-- The rendered B-spline triangles are not the collision surface.
-- `MAX_JOINTS` is a fixed upper bound substantially larger than ordinary play requires.
-- The end states schedule cartridge exit and do not offer an in-process restart.
-- Host tests exercise the pure and orchestration-level invariants, but they do not replace a complete twelve-room RIVEMU playthrough.
+The host checks in `tests/` cover the room matrix and doors, scoring, body-chain invariants, B-spline basis and periodic geometry, Technical-view controls, completion events, spawn failure and collision clearance. They use the same production functions where possible and small RIVES stubs where the platform context is required.

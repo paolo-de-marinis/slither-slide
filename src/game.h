@@ -3,7 +3,6 @@
 
 #include "game_state.h"
 
-// Core game functions
 void gameInitialize(void);
 void gameUpdate(void);
 void gameStart(void);

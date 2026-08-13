@@ -14,8 +14,10 @@ static bool skinSelected = false;
 #define CATERPILLAR_PREVIEW_JOINTS 6
 
 static void drawSkinOptions(void);
-static void
-buildPreviewJoints(JointPoint *joints, int jointCount, float previewLength, float curveHeight);
+static void buildPreviewJoints(JointPoint *joints,
+                               int jointCount,
+                               float previewLength,
+                               float curveHeight);
 static void drawSkinPreview(void);
 static void drawSelectionInstructions(void);
 static bool startButtonPressed(void);
@@ -94,8 +96,10 @@ static void drawSkinOptions(void) {
                   caterpillarColor);
 }
 
-static void
-buildPreviewJoints(JointPoint *joints, int jointCount, float previewLength, float curveHeight) {
+static void buildPreviewJoints(JointPoint *joints,
+                               int jointCount,
+                               float previewLength,
+                               float curveHeight) {
     for (int i = 0; i < jointCount; i++) {
         float t = (float)i / (jointCount - 1);
         joints[i].x = CENTER_X + t * previewLength - previewLength / 2.0f;
