@@ -1,12 +1,13 @@
 #include "levels.h"
 
 #include "audio.h"
-#include "game.h"
-#include "objects.h"
+#include "collectible.h"
+#include "game_state.h"
+#include "scoring.h"
+#include "walls.h"
 
+#include <stddef.h>
 #include <string.h>
-
-extern GameData game;
 
 static const LevelConfig levelConfigs[MAX_LEVEL] = {{5, 6, 1, 100},
                                                     {8, 6, 1, 200},
@@ -21,208 +22,169 @@ static const LevelConfig levelConfigs[MAX_LEVEL] = {{5, 6, 1, 100},
                                                     {40, 3, 1, 2500},
                                                     {50, 3, 1, 5000}};
 
-static int currentLevel = 1;
-static int highestCompletedLevel = 0;
-static bool doorOpen = false;
-static bool bonusAwarded[MAX_LEVEL];
-
-static void clearLevelWalls(void);
-static void addBoundaryWalls(float roomOffsetX, float roomOffsetY);
+static bool buildLevelWalls(int level);
 static void addLevelObstacles(int level, float roomOffsetX, float roomOffsetY);
-static void removeWallSegment(int side, int segment);
 static void openAvailableDoors(void);
 
 void resetLevelProgress(void) {
-    currentLevel = 1;
-    highestCompletedLevel = 0;
-    doorOpen = false;
-    memset(bonusAwarded, 0, sizeof(bonusAwarded));
+    game.currentLevel = 1;
+    memset(game.levelItems, 0, sizeof(game.levelItems));
+    memset(game.levelCompleted, 0, sizeof(game.levelCompleted));
 }
 
-void initializeLevel(int levelNumber) {
-    int roomX = 0;
-    int roomY = 0;
-
-    if (levelNumber < 1 || levelNumber > MAX_LEVEL ||
-        !getRoomPosition(levelNumber, &roomX, &roomY)) {
-        return;
+bool getLevelConfig(int level, LevelConfig *config) {
+    if (level < 1 || level > MAX_LEVEL || config == NULL) {
+        return false;
     }
-
-    currentLevel = levelNumber;
-    LevelConfig config = levelConfigs[currentLevel - 1];
-    game.moveDelay = config.moveDelay;
-    game.applesRequired = config.requiredApples;
-    game.growthRate = config.growthRate;
-    game.apples = 0;
-    game.currentLevelStartTime = game.ticks / (float)TARGET_FPS;
-    doorOpen = currentLevel <= highestCompletedLevel;
-
-    addLevelWalls(currentLevel);
-    spawnApple();
+    *config = levelConfigs[level - 1];
+    return true;
 }
 
 int getCurrentLevel(void) {
-    return currentLevel;
+    return game.currentLevel;
 }
 
-LevelConfig getLevelConfig(int level) {
-    if (level < 1 || level > MAX_LEVEL) {
-        return levelConfigs[0];
-    }
-
-    return levelConfigs[level - 1];
+bool isLevelCompleted(int level) {
+    return level >= 1 && level <= MAX_LEVEL && game.levelCompleted[level - 1];
 }
 
 bool isLevelComplete(void) {
-    return currentLevel <= highestCompletedLevel ||
-           game.apples >= levelConfigs[currentLevel - 1].requiredApples;
+    LevelConfig config;
+    return getLevelConfig(game.currentLevel, &config) &&
+           (isLevelCompleted(game.currentLevel) ||
+            game.levelItems[game.currentLevel - 1] >= config.requiredItems);
 }
 
 bool canTransitionToLevel(int level) {
-    return canTraverseLevels(currentLevel, level, isLevelComplete());
+    return canTraverseLevels(game.currentLevel, level, isLevelComplete());
 }
 
-void checkDoorState(void) {
-    if (doorOpen || game.apples < levelConfigs[currentLevel - 1].requiredApples) {
-        return;
+bool initializeLevel(int levelNumber) {
+    LevelConfig config;
+    if (!getLevelConfig(levelNumber, &config)) {
+        return false;
     }
 
-    doorOpen = true;
-    if (currentLevel > highestCompletedLevel) {
-        highestCompletedLevel = currentLevel;
+    game.currentLevel = levelNumber;
+    game.moveDelay = config.moveDelay;
+    game.growthRate = config.growthRate;
+    if (!buildLevelWalls(levelNumber)) {
+        return false;
     }
+
+    scoringBeginLevel(&game, game.currentLevel);
+    if (isLevelCompleted(game.currentLevel)) {
+        collectibleHide();
+        return true;
+    }
+    return collectibleSpawn(&game);
+}
+
+bool checkDoorState(void) {
+    LevelConfig config;
+    if (!getLevelConfig(game.currentLevel, &config) || isLevelCompleted(game.currentLevel) ||
+        game.levelItems[game.currentLevel - 1] < config.requiredItems) {
+        return false;
+    }
+
+    scoringCompleteLevel(&game, game.currentLevel, config.bonusPoints);
+    collectibleHide();
     openAvailableDoors();
     playDoorSound();
+    return true;
 }
 
-void handleLevelTransition(void) {
+bool handleLevelTransition(void) {
     float headX = game.headPosition.x * TILE_SIZE + TILE_SIZE / 2.0f;
     float headY = game.headPosition.y * TILE_SIZE + TILE_SIZE / 2.0f;
     int roomX = (int)(headX / ROOM_WIDTH);
     int roomY = (int)(headY / ROOM_HEIGHT);
     int nextLevel = getLevelAtPosition(roomX, roomY);
 
-    if (nextLevel == 0 || nextLevel == currentLevel || !canTransitionToLevel(nextLevel)) {
-        return;
+    if (nextLevel == 0 || nextLevel == game.currentLevel) {
+        return true;
+    }
+    if (!canTransitionToLevel(nextLevel)) {
+        return false;
     }
 
-    int previousLevel = currentLevel;
-    if (nextLevel == previousLevel + 1 && !bonusAwarded[previousLevel - 1]) {
-        game.score += levelConfigs[previousLevel - 1].bonusPoints;
-        bonusAwarded[previousLevel - 1] = true;
-    }
-
-    initializeLevel(nextLevel);
+    scoringPauseLevel(&game);
+    return initializeLevel(nextLevel);
 }
 
-static void removeWallSegment(int side, int segment) {
-    if (side < 0 || side >= 4 || segment < 0 || segment >= WALL_SEGMENTS_PER_SIDE) {
-        return;
+static bool buildLevelWalls(int level) {
+    int roomX = 0;
+    int roomY = 0;
+    if (!getRoomPosition(level, &roomX, &roomY)) {
+        return false;
     }
 
-    int wallIndex = side * WALL_SEGMENTS_PER_SIDE + segment;
-    object.walls[wallIndex].width = 0.0f;
-    object.walls[wallIndex].height = 0.0f;
+    float roomOffsetX = roomX * ROOM_WIDTH;
+    float roomOffsetY = roomY * ROOM_HEIGHT;
+    wallsBeginRoom(roomOffsetX, roomOffsetY);
+    openAvailableDoors();
+    addLevelObstacles(level, roomOffsetX, roomOffsetY);
+    return true;
 }
 
 static void openAvailableDoors(void) {
     int roomX = 0;
     int roomY = 0;
-    if (!getRoomPosition(currentLevel, &roomX, &roomY)) {
+    if (!getRoomPosition(game.currentLevel, &roomX, &roomY)) {
         return;
     }
 
-    const int offsetX[] = {-1, 1, 0, 0};
-    const int offsetY[] = {0, 0, -1, 1};
-    const int wallSide[] = {0, 1, 2, 3};
+    const int offsetX[WALL_SIDE_COUNT] = {-1, 1, 0, 0};
+    const int offsetY[WALL_SIDE_COUNT] = {0, 0, -1, 1};
 
-    for (int direction = 0; direction < 4; direction++) {
-        int neighbor = getLevelAtPosition(roomX + offsetX[direction], roomY + offsetY[direction]);
+    for (int side = 0; side < WALL_SIDE_COUNT; side++) {
+        int neighbor = getLevelAtPosition(roomX + offsetX[side], roomY + offsetY[side]);
         if (!canTransitionToLevel(neighbor)) {
             continue;
         }
-
         for (int segment = 0; segment < DOOR_SEGMENT_COUNT; segment++) {
-            removeWallSegment(wallSide[direction], DOOR_START_SEGMENT + segment);
+            wallsRemoveBoundarySegment((WallSide)side, DOOR_START_SEGMENT + segment);
         }
     }
-}
-
-void addLevelWalls(int level) {
-    int roomX = 0;
-    int roomY = 0;
-    if (!getRoomPosition(level, &roomX, &roomY)) {
-        return;
-    }
-
-    clearLevelWalls();
-    float roomOffsetX = roomX * ROOM_WIDTH;
-    float roomOffsetY = roomY * ROOM_HEIGHT;
-    addBoundaryWalls(roomOffsetX, roomOffsetY);
-    openAvailableDoors();
-    addLevelObstacles(level, roomOffsetX, roomOffsetY);
-}
-
-static void addBoundaryWalls(float roomOffsetX, float roomOffsetY) {
-    float segmentWidth = ROOM_WIDTH / (float)WALL_SEGMENTS_PER_SIDE;
-    float segmentHeight = ROOM_HEIGHT / (float)WALL_SEGMENTS_PER_SIDE;
-
-    for (int segment = 0; segment < WALL_SEGMENTS_PER_SIDE; segment++) {
-        object.walls[segment] = (Wall){roomOffsetX - WALL_THICKNESS,
-                                       roomOffsetY + segment * segmentHeight,
-                                       WALL_THICKNESS * 2,
-                                       segmentHeight};
-        object.walls[WALL_SEGMENTS_PER_SIDE + segment] =
-            (Wall){roomOffsetX + ROOM_WIDTH - WALL_THICKNESS,
-                   roomOffsetY + segment * segmentHeight,
-                   WALL_THICKNESS * 2,
-                   segmentHeight};
-        object.walls[2 * WALL_SEGMENTS_PER_SIDE + segment] =
-            (Wall){roomOffsetX + segment * segmentWidth, roomOffsetY, segmentWidth, WALL_THICKNESS};
-        object.walls[3 * WALL_SEGMENTS_PER_SIDE + segment] =
-            (Wall){roomOffsetX + segment * segmentWidth,
-                   roomOffsetY + ROOM_HEIGHT - WALL_THICKNESS,
-                   segmentWidth,
-                   WALL_THICKNESS};
-    }
-
-    object.wallCount = WALL_SEGMENTS_PER_SIDE * 4;
 }
 
 static void addLevelObstacles(int level, float roomOffsetX, float roomOffsetY) {
     switch (level) {
         case 2:
-            object.walls[object.wallCount++] = (Wall){
-                roomOffsetX + ROOM_WIDTH / 2 - 20, roomOffsetY + ROOM_HEIGHT / 2 - 20, 40, 40};
+            wallsAdd((Wall){roomOffsetX + ROOM_WIDTH / 2 - 20,
+                            roomOffsetY + ROOM_HEIGHT / 2 - 20,
+                            40,
+                            40});
             break;
         case 3:
-            object.walls[object.wallCount++] = (Wall){
-                roomOffsetX + ROOM_WIDTH / 3 - 20, roomOffsetY + ROOM_HEIGHT / 3 - 20, 40, 40};
-            object.walls[object.wallCount++] = (Wall){roomOffsetX + 2 * ROOM_WIDTH / 3 - 20,
-                                                      roomOffsetY + 2 * ROOM_HEIGHT / 3 - 20,
-                                                      40,
-                                                      40};
+            wallsAdd((Wall){roomOffsetX + ROOM_WIDTH / 3 - 20,
+                            roomOffsetY + ROOM_HEIGHT / 3 - 20,
+                            40,
+                            40});
+            wallsAdd((Wall){roomOffsetX + 2 * ROOM_WIDTH / 3 - 20,
+                            roomOffsetY + 2 * ROOM_HEIGHT / 3 - 20,
+                            40,
+                            40});
             break;
         case 4:
-            object.walls[object.wallCount++] = (Wall){
-                roomOffsetX + ROOM_WIDTH / 2 - 60, roomOffsetY + ROOM_HEIGHT / 2 - 10, 120, 20};
-            object.walls[object.wallCount++] = (Wall){
-                roomOffsetX + ROOM_WIDTH / 2 - 10, roomOffsetY + ROOM_HEIGHT / 2 - 60, 20, 120};
+            wallsAdd((Wall){roomOffsetX + ROOM_WIDTH / 2 - 60,
+                            roomOffsetY + ROOM_HEIGHT / 2 - 10,
+                            120,
+                            20});
+            wallsAdd((Wall){roomOffsetX + ROOM_WIDTH / 2 - 10,
+                            roomOffsetY + ROOM_HEIGHT / 2 - 60,
+                            20,
+                            120});
             break;
         case 5:
             for (int obstacle = 0; obstacle < 3; obstacle++) {
-                object.walls[object.wallCount++] =
-                    (Wall){roomOffsetX + (obstacle + 1) * ROOM_WIDTH / 4 - 10,
-                           roomOffsetY + ROOM_HEIGHT / 4,
-                           20,
-                           ROOM_HEIGHT / 2};
+                wallsAdd((Wall){roomOffsetX + (obstacle + 1) * ROOM_WIDTH / 4 - 10,
+                                roomOffsetY + ROOM_HEIGHT / 4,
+                                20,
+                                ROOM_HEIGHT / 2});
             }
             break;
         default:
             break;
     }
-}
-
-static void clearLevelWalls(void) {
-    object.wallCount = 0;
 }

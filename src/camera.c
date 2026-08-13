@@ -1,6 +1,6 @@
 #include "camera.h"
 
-#include "game.h"
+#include "game_state.h"
 #include "levels.h"
 
 #include <math.h>
@@ -16,8 +16,6 @@ static struct {
     .smoothing = 0.15f
 };
 
-extern GameData game;
-
 void cameraInitialize(void) {
     camera.x = 0.0f;
     camera.y = 0.0f;
@@ -30,7 +28,8 @@ void cameraUpdate(void) {
     int roomX = 0;
     int roomY = 0;
 
-    if (!game.started || !getRoomPosition(getCurrentLevel(), &roomX, &roomY)) {
+    if (game.state == GAME_STATE_CHAR_SELECT ||
+        !getRoomPosition(getCurrentLevel(), &roomX, &roomY)) {
         return;
     }
 

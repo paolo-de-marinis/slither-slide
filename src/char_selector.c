@@ -141,7 +141,7 @@ static void drawSkinPreview(void) {
         drawCaterpillarHead(previewJoints[0].x,
                             previewJoints[0].y,
                             previewJoints[0].angle,
-                            CATERPILLAR_HEAD_RADIUS * PREVIEW_SCALE);
+                            CATERPILLAR_HEAD_COLLISION_RADIUS * PREVIEW_SCALE);
     }
 }
 

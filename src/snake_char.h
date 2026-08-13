@@ -6,7 +6,7 @@
 #include "camera.h"
 
 // Constants specific to snake rendering
-#define SNAKE_HEAD_RADIUS 6.0f
+#define SNAKE_HEAD_COLLISION_RADIUS 6.0f
 #define SNAKE_TONGUE_LENGTH 8
 #define SNAKE_NOSE_LENGTH 4
 #define SNAKE_EYE_SIZE 2

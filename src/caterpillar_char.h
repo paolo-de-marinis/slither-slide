@@ -6,7 +6,7 @@
 #include "camera.h"
 
 // Simplified constants to match snake
-#define CATERPILLAR_HEAD_RADIUS 7.0f
+#define CATERPILLAR_HEAD_COLLISION_RADIUS 7.0f
 
 // Core drawing functions
 void drawCaterpillarBody(const JointPoint *joints, int jointCount, float bodyScale);

@@ -1,4 +1,5 @@
 #include "snake_char.h"
+#include "spline_math.h"
 #include "ui_constants.h"
 #include <math.h>
 #include <stdlib.h>
@@ -20,22 +21,6 @@ static int pointCount = 0;
 
 static void curveVertex(int x, int y);
 static void drawSmoothCurve(uint32_t outlineColor);
-static float b0(float t) {
-    return (1 - t) * (1 - t) * (1 - t) / 6.0f;
-}
-
-static float b1(float t) {
-    return (3 * t * t * t - 6 * t * t + 4) / 6.0f;
-}
-
-static float b2(float t) {
-    return (-3 * t * t * t + 3 * t * t + 3 * t + 1) / 6.0f;
-}
-
-static float b3(float t) {
-    return t * t * t / 6.0f;
-}
-
 float getSnakeBodyWidth(int segmentIndex) {
     if (segmentIndex == 0) {
         return 8.0f;
@@ -215,10 +200,16 @@ static void drawSmoothCurve(uint32_t outlineColor) {
 
     for (int i = 0; i < pointCount; i++) {
         for (float t = 0; t < 1.0f; t += step) {
-            float x = b0(t) * extendedPoints[i].x + b1(t) * extendedPoints[i + 1].x +
-                      b2(t) * extendedPoints[i + 2].x + b3(t) * extendedPoints[i + 3].x;
-            float y = b0(t) * extendedPoints[i].y + b1(t) * extendedPoints[i + 1].y +
-                      b2(t) * extendedPoints[i + 2].y + b3(t) * extendedPoints[i + 3].y;
+            float weights[4];
+            cubicUniformBSplineBasis(t, weights);
+            float x = weights[0] * extendedPoints[i].x +
+                      weights[1] * extendedPoints[i + 1].x +
+                      weights[2] * extendedPoints[i + 2].x +
+                      weights[3] * extendedPoints[i + 3].x;
+            float y = weights[0] * extendedPoints[i].y +
+                      weights[1] * extendedPoints[i + 1].y +
+                      weights[2] * extendedPoints[i + 2].y +
+                      weights[3] * extendedPoints[i + 3].y;
 
             curvePoints[curvePointCount].x = (int)x;
             curvePoints[curvePointCount].y = (int)y;
