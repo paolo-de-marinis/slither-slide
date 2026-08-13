@@ -1,41 +1,21 @@
 #include "snake_char.h"
-#include "spline_math.h"
+#include "camera.h"
 #include "ui_constants.h"
 #include <math.h>
 #include <stdlib.h>
 
-#define MAX_OUTLINE_POINTS (MAX_JOINTS * 2 + 1)
-#define CURVE_POINTS_PER_OUTLINE_POINT 2
-
-typedef struct {
-    int x;
-    int y;
-} CurvePoint;
-
 // Reused every frame to keep large drawing buffers off the stack.
-static CurvePoint points[MAX_OUTLINE_POINTS];
-static CurvePoint extendedPoints[MAX_OUTLINE_POINTS + 3];
-static CurvePoint curvePoints[MAX_OUTLINE_POINTS * CURVE_POINTS_PER_OUTLINE_POINT];
+static SnakeGeometry geometry;
 static JointPoint drawJoints[MAX_JOINTS];
-static int pointCount = 0;
 
-static void curveVertex(int x, int y);
 static void drawSmoothCurve(uint32_t outlineColor);
-float getSnakeBodyWidth(int segmentIndex) {
-    if (segmentIndex == 0) {
-        return 8.0f;
-    }
-    if (segmentIndex == 1) {
-        return 7.0f;
-    }
-
-    float baseWidth = 6.0f;
-    float taper = segmentIndex / 24.0f;
-    return fmaxf(baseWidth - taper, 4.0f);
-}
 
 void drawSnakeBody(const JointPoint *joints, int jointCount) {
-    pointCount = 0;
+    if (joints == NULL || jointCount < 2 || jointCount > MAX_JOINTS) {
+        geometry.controlPointCount = 0;
+        geometry.curveSampleCount = 0;
+        return;
+    }
 
     for (int i = 0; i < jointCount; i++) {
         float screenX = 0.0f;
@@ -46,29 +26,14 @@ void drawSnakeBody(const JointPoint *joints, int jointCount) {
         drawJoints[i].angle = joints[i].angle;
     }
 
-    for (int i = jointCount - 1; i >= 0; i--) {
-        float x = 0.0f;
-        float y = 0.0f;
-        getOffsetPosition(&drawJoints[0], i, PI / 2.0f, &x, &y);
-        curveVertex((int)x, (int)y);
-    }
-
-    float fx = 0.0f;
-    float fy = 0.0f;
-    getOffsetPosition(&drawJoints[0], 0, 0, &fx, &fy);
-    curveVertex((int)fx, (int)fy);
-
-    for (int i = 0; i < jointCount; i++) {
-        float x = 0.0f;
-        float y = 0.0f;
-        getOffsetPosition(&drawJoints[0], i, -PI / 2.0f, &x, &y);
-        curveVertex((int)x, (int)y);
+    if (!snakeGeometryBuild(drawJoints, jointCount, &geometry)) {
+        return;
     }
 
     drawSmoothCurve(RIV_COLOR_GREEN);
 
     for (int i = 1; i < jointCount - 1; i++) {
-        float width = getSnakeBodyWidth(i);
+        float width = snakeBodyWidth(i);
         float angle = drawJoints[i].angle;
 
         const int rowCount = 2;
@@ -104,7 +69,7 @@ void drawSnakeHead(float x, float y, float angle) {
     float screenY = 0.0f;
     worldToScreen(x, y, &screenX, &screenY);
 
-    float headRadius = getSnakeBodyWidth(0) * 0.9f;
+    float headRadius = snakeBodyWidth(0) * 0.9f;
     float headOffset = headRadius * 0.5f;
     float headX = screenX + cosf(angle) * headOffset;
     float headY = screenY + sinf(angle) * headOffset;
@@ -140,7 +105,7 @@ void drawSnakeTongue(float x, float y, float angle, float extension) {
     float screenY = 0.0f;
     worldToScreen(x, y, &screenX, &screenY);
 
-    float headRadius = getSnakeBodyWidth(0) * 0.9f;
+    float headRadius = snakeBodyWidth(0) * 0.9f;
     float headOffset = headRadius * 0.5f;
 
     float tongueStartX = screenX + cosf(angle) * headOffset + cosf(angle) * SNAKE_NOSE_LENGTH;
@@ -169,89 +134,50 @@ void drawSnakeTongue(float x, float y, float angle, float extension) {
         (int)forkStartX, (int)forkStartY, (int)rightForkX, (int)rightForkY, RIV_COLOR_RED);
 }
 
-void getOffsetPosition(const JointPoint *joints, int index, float angleOffset, float *x, float *y) {
-    float width = getSnakeBodyWidth(index);
-    *x = joints[index].x + cosf(joints[index].angle + angleOffset) * width;
-    *y = joints[index].y + sinf(joints[index].angle + angleOffset) * width;
-}
-
-static void curveVertex(int x, int y) {
-    if (pointCount < MAX_OUTLINE_POINTS) {
-        points[pointCount].x = x;
-        points[pointCount].y = y;
-        pointCount++;
-    }
+const SnakeGeometry *snakeBodyGeometry(void) {
+    return &geometry;
 }
 
 static void drawSmoothCurve(uint32_t outlineColor) {
-    if (pointCount < 4) {
+    if (geometry.curveSampleCount < 2) {
         return;
     }
 
-    for (int i = 0; i < pointCount; i++) {
-        extendedPoints[i] = points[i];
-    }
-    extendedPoints[pointCount] = points[0];
-    extendedPoints[pointCount + 1] = points[1];
-    extendedPoints[pointCount + 2] = points[2];
-
-    int curvePointCount = 0;
-    float step = 0.5f;
-
-    for (int i = 0; i < pointCount; i++) {
-        for (float t = 0; t < 1.0f; t += step) {
-            float weights[4];
-            cubicUniformBSplineBasis(t, weights);
-            float x = weights[0] * extendedPoints[i].x +
-                      weights[1] * extendedPoints[i + 1].x +
-                      weights[2] * extendedPoints[i + 2].x +
-                      weights[3] * extendedPoints[i + 3].x;
-            float y = weights[0] * extendedPoints[i].y +
-                      weights[1] * extendedPoints[i + 1].y +
-                      weights[2] * extendedPoints[i + 2].y +
-                      weights[3] * extendedPoints[i + 3].y;
-
-            curvePoints[curvePointCount].x = (int)x;
-            curvePoints[curvePointCount].y = (int)y;
-            curvePointCount++;
-        }
-    }
-
-    int halfCurvePoints = curvePointCount / 2;
+    int halfCurvePoints = geometry.curveSampleCount / 2;
     for (int i = 0; i < halfCurvePoints - 1; i++) {
         int leftIndex = i;
-        int rightIndex = curvePointCount - 1 - i;
+        int rightIndex = geometry.curveSampleCount - 1 - i;
         int nextLeftIndex = leftIndex + 1;
-        int nextRightIndex = curvePointCount - 2 - i;
+        int nextRightIndex = geometry.curveSampleCount - 2 - i;
 
-        riv_draw_triangle_fill(curvePoints[leftIndex].x,
-                               curvePoints[leftIndex].y,
-                               curvePoints[nextLeftIndex].x,
-                               curvePoints[nextLeftIndex].y,
-                               curvePoints[rightIndex].x,
-                               curvePoints[rightIndex].y,
+        riv_draw_triangle_fill((int)geometry.curveSamples[leftIndex].x,
+                               (int)geometry.curveSamples[leftIndex].y,
+                               (int)geometry.curveSamples[nextLeftIndex].x,
+                               (int)geometry.curveSamples[nextLeftIndex].y,
+                               (int)geometry.curveSamples[rightIndex].x,
+                               (int)geometry.curveSamples[rightIndex].y,
                                RIV_COLOR_LIGHTGREEN);
 
-        riv_draw_triangle_fill(curvePoints[nextLeftIndex].x,
-                               curvePoints[nextLeftIndex].y,
-                               curvePoints[nextRightIndex].x,
-                               curvePoints[nextRightIndex].y,
-                               curvePoints[rightIndex].x,
-                               curvePoints[rightIndex].y,
+        riv_draw_triangle_fill((int)geometry.curveSamples[nextLeftIndex].x,
+                               (int)geometry.curveSamples[nextLeftIndex].y,
+                               (int)geometry.curveSamples[nextRightIndex].x,
+                               (int)geometry.curveSamples[nextRightIndex].y,
+                               (int)geometry.curveSamples[rightIndex].x,
+                               (int)geometry.curveSamples[rightIndex].y,
                                RIV_COLOR_LIGHTGREEN);
     }
 
-    for (int i = 0; i < curvePointCount - 1; i++) {
-        riv_draw_line(curvePoints[i].x,
-                      curvePoints[i].y,
-                      curvePoints[i + 1].x,
-                      curvePoints[i + 1].y,
+    for (int i = 0; i < geometry.curveSampleCount - 1; i++) {
+        riv_draw_line((int)geometry.curveSamples[i].x,
+                      (int)geometry.curveSamples[i].y,
+                      (int)geometry.curveSamples[i + 1].x,
+                      (int)geometry.curveSamples[i + 1].y,
                       outlineColor);
     }
-    riv_draw_line(curvePoints[curvePointCount - 1].x,
-                  curvePoints[curvePointCount - 1].y,
-                  curvePoints[0].x,
-                  curvePoints[0].y,
+    riv_draw_line((int)geometry.curveSamples[geometry.curveSampleCount - 1].x,
+                  (int)geometry.curveSamples[geometry.curveSampleCount - 1].y,
+                  (int)geometry.curveSamples[0].x,
+                  (int)geometry.curveSamples[0].y,
                   outlineColor);
 }
 

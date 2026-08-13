@@ -5,6 +5,7 @@
 #include "camera.h"
 #include "char_selector.h"
 #include "collectible.h"
+#include "controls.h"
 #include "levels.h"
 #include "scoring.h"
 #include "snake_motion.h"
@@ -14,7 +15,9 @@
 
 GameData game;
 
-static bool handleDebugLevelSkip(void);
+#if CHEATS_ENABLED
+static bool handleCheatLevelSkip(void);
+#endif
 
 void gameInitialize(void) {
     memset(&game, 0, sizeof(game));
@@ -64,8 +67,9 @@ void gameStart(void) {
     playStartSound();
 }
 
-static bool handleDebugLevelSkip(void) {
-    if (!DEBUG_MODE || !riv->keys[RIV_GAMEPAD_R3].press) {
+#if CHEATS_ENABLED
+static bool handleCheatLevelSkip(void) {
+    if (!riv->keys[CONTROL_CHEAT_NEXT_LEVEL].press) {
         return true;
     }
 
@@ -86,9 +90,10 @@ static bool handleDebugLevelSkip(void) {
         gameEnd();
         return false;
     }
-    riv_printf("Debug: skipped to level %d\n", level + 1);
+    riv_printf("Cheat: skipped to level %d\n", level + 1);
     return true;
 }
+#endif
 
 void gameUpdate(void) {
     if (game.state == GAME_STATE_CHAR_SELECT) {
@@ -103,9 +108,11 @@ void gameUpdate(void) {
     }
 
     game.ticks++;
-    if (!handleDebugLevelSkip()) {
+#if CHEATS_ENABLED
+    if (!handleCheatLevelSkip()) {
         return;
     }
+#endif
     if (getCurrentSkin() == SKIN_SNAKE) {
         updateSnakeAnimation(&game.snakeAnimation);
     }

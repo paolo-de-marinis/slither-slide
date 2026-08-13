@@ -1,5 +1,7 @@
 # Slither Slide
 
+![Slither Slide: procedural snake gameplay and runtime Technical view](docs/media/slither-slide-hero.png)
+
 Slither Slide is a RIVES cartridge built around a multi-room snake game. The player collects apples and coins, grows a procedurally rendered body, opens level doors and avoids walls and self-collision.
 
 ## Original RIVES cartridge and Jam result
@@ -18,7 +20,11 @@ The Slither Slide itch.io submission was later removed, so the live Jam page now
 
 ## About this repository
 
-This repository contains the cleaned-up and documented source of the original RIVES cartridge. The gameplay and core implementation derive from the published cartridge; the source was subsequently reorganized and documented to improve readability and make the implementation easier to study. Only the maintained source, standalone host-side tests and required build assets are included; working archives and extracted copies of the original cartridge are intentionally excluded.
+This repository contains a post-jam, maintained version of the cartridge originally developed for RIVES Jam #3. The exact source snapshot submitted to the jam is no longer retained; the current codebase includes subsequent fixes, cleanup, documentation and refactoring.
+
+Only the maintained source, standalone host-side tests and required build assets are included; working archives and extracted copies of the original cartridge are intentionally excluded.
+
+The current maintained version is developed with assistance from OpenAI Codex.
 
 ## Development
 
@@ -36,17 +42,19 @@ The documentation follows the same progression used in a mathematical implementa
 
 Choose the snake or caterpillar skin, then collect the required items in each room. The last item is rendered as a coin; collecting it completes the room and opens the route forward. Collecting the final coin in room 12 completes the cartridge. Returning to the previous adjacent room is allowed; completed rooms keep their result and do not generate another collectible. Contact between the head and a closed boundary, obstacle or the body ends the run.
 
-| Action | RIVES gamepad |
-|---|---|
-| Choose skin | D-pad UP / DOWN |
-| Start | Any action, shoulder, SELECT or START button |
-| Move | D-pad |
+| Action | Keyboard | RIVES gamepad |
+|---|---|---|
+| Choose skin | Arrow UP / DOWN | D-pad UP / DOWN |
+| Start | Z or E | A1 or START |
+| Move | Arrow keys | D-pad |
+| Toggle Technical view | D | R1 |
+| Previous / next Technical span | A / F | L2 / R2 |
 
-The snake cannot reverse directly into its current direction.
+The snake cannot reverse directly into its current direction. The Technical view is available in the normal cartridge, starts disabled and is rendered only for the snake skin. Its span selection advances automatically until A/F or L2/R2 is pressed, then remains under manual control.
 
 ## Technical overview
 
-`main()` in `src/main.c` initializes RIVES, audio and `GameData`, then calls `gameUpdate()`, `gameDraw()` and `playBackgroundMusic()` once per `riv_present()` frame. Logical movement uses a tile grid; `JointPoint` values follow the head to produce smooth visual geometry. Levels occupy a 4 × 3 room matrix, with `cameraUpdate()` easing the view between rooms. Head collisions use circle/rectangle and sampled body-segment tests. Rendering converts the two sides of the body into a closed cubic uniform B-spline outline and fills it with triangles.
+`main()` in `src/main.c` initializes RIVES, audio, `GameData` and the separate developer-control state, then calls `gameUpdate()`, `gameDraw()` and `playBackgroundMusic()` once per `riv_present()` frame. Logical movement uses a tile grid; `JointPoint` values follow the head to produce smooth visual geometry. Levels occupy a 4 × 3 room matrix, with `cameraUpdate()` easing the view between rooms. Head collisions use circle/rectangle and sampled body-segment tests. Rendering converts the two sides of the body into a closed cubic uniform B-spline outline and fills it with triangles.
 
 The implementation is procedural C, not object-oriented code. See [the code overview](docs/code-overview.md) for the complete state and frame flow.
 
@@ -58,10 +66,13 @@ The implementation is procedural C, not object-oriented code. See [the code over
 - `src/snake_motion.c` / `snake_motion.h` — input, grid movement, tail motion and collection events.
 - `src/collision.c` / `collision.h` — room-edge, wall and self-collision tests.
 - `src/body_chain.c` / `body_chain.h` — joint constraints, fixed head anchor and final tangent update.
+- `src/snake_geometry.c` / `snake_geometry.h` — pure profile construction, periodic span evaluation and renderer samples.
 - `src/scoring.c` / `scoring.h` — per-level clocks, persistent bonuses, total score and outcard.
-- `src/game_render.c` / `game_render.h` — HUD, characters, debug geometry and ending panels.
-- `src/snake_char.c` / `snake_char.h` — snake profile, cubic B-spline sampling, fill and head/tongue drawing.
+- `src/game_render.c` / `game_render.h` — HUD, characters, optional Technical view and ending panels.
+- `src/snake_char.c` / `snake_char.h` — B-spline fill plus snake head, tongue and scale drawing.
 - `src/spline_math.c` / `spline_math.h` — the four cubic uniform B-spline basis weights.
+- `src/technical_view.c` / `technical_view.h` — read-only visualization of joints, controls, samples, active span and basis weights.
+- `src/developer_controls.c` / `developer_controls.h` — runtime UI toggle and active-span selection, kept outside `GameData`.
 - `src/caterpillar_char.c` / `caterpillar_char.h` — alternate character renderer.
 - `src/levels.c` / `levels.h` — level requirements, doors, transitions and obstacles.
 - `src/room_layout.c` / `room_layout.h` — room matrix and adjacency rules.
@@ -73,13 +84,33 @@ The implementation is procedural C, not object-oriented code. See [the code over
 - `src/audio.c` / `audio.h` and `src/seqt.h` — music and sound effects.
 - `tests/` — layout, all door transitions, scoring, final completion, spawn failure, body-chain and B-spline checks.
 
+## Technical view
+
+![Slither Slide Technical view: dynamic joints, B-spline control polygon, renderer samples and active-span parametrization](docs/media/slither-slide-technical-view.gif)
+
+The normal-build overlay follows the live snake geometry. Pink marks the center-chain joints; every lateral control point remains light blue and the closed control polygon is blue; yellow marks the curve and renderer samples. Four orange rings identify only the controls $P_i,\ldots,P_{i+3}$ that contribute to the selected span, not the complete control-point set. White marks the animated $C_i(t)$. The panel reports the selection mode, $t$ and the four basis weights.
+
+| Normal gameplay | Technical view |
+|---|---|
+| ![Slither Slide normal snake gameplay](docs/media/slither-slide-gameplay.png) | ![Slither Slide Technical view enabled during gameplay](docs/media/slither-slide-technical-view.png) |
+
 ## Procedural body mathematics
 
-`drawSnakeBody()` creates an ordered closed outline from left and right offsets around the body joints. `drawSmoothCurve()` obtains the four degree-3 uniform B-spline weights from `cubicUniformBSplineBasis()`, samples each span at `t = 0.0` and `0.5`, fills paired samples with triangles and draws the closed edge. This spline is visual geometry; gameplay collision tests use the joint chain and a skin-specific head radius. See [the mathematics of the procedural body](docs/b-spline.md), including the joint constraints, profile construction, cubic basis, design trade-offs and study-source attribution.
+`snakeGeometryBuild()` creates an ordered closed outline from left and right offsets around the body joints. `snakeGeometryEvaluateSpan()` obtains the four degree-3 uniform B-spline weights from `cubicUniformBSplineBasis()` and the geometry module stores the renderer's two samples per span, at `t = 0.0` and `0.5`. `drawSnakeBody()` consumes those samples for the paired-triangle fill and closed edge. This spline is visual geometry; gameplay collision tests use the joint chain and a single skin-independent head radius that preserves the original gameplay clearance. See [the mathematics of the procedural body](docs/b-spline.md), including the joint constraints, profile construction, cubic basis, design trade-offs and study-source attribution.
 
-## Debug mode
+The visible construction is
 
-`DEBUG_MODE` in `src/game_state.h` is the compile-time switch. It is `0` by default; set it to `1`, or compile with `-DDEBUG_MODE=1`, to enable collision/audio diagnostics, a geometry overlay and the R3 level-skip helper. The overlay shows joint centers and radii, left/right profile offsets and the skin-specific head collision radius. R3 completes the current level through the ordinary scoring and door path, then advances; on level 12 it completes the run.
+```math
+\text{dynamic joints}\longrightarrow\text{lateral profile}
+\longrightarrow\text{control polygon}\longrightarrow\text{B-spline}
+\longrightarrow\text{triangulation}.
+```
+
+## Technical view, diagnostics and cheats
+
+Press D/R1 to toggle the Technical view at runtime. It distinguishes the center-chain joints, all lateral B-spline control points, the control polygon, the sampled spline and the four controls of one active span. The span advances automatically until the first A/F or L2/R2 press. Afterwards each press selects exactly the previous or next span, from $P_i,\ldots,P_{i+3}$ to $P_{i\pm1},\ldots,P_{i\pm1+3}$, with wrap-around modulo the current control-point count. A moving white point continues to display $C_i(t)$ for $t\in[0,1)$ inside the selected span; the panel reports the current span and the four basis weights $B_0(t),\ldots,B_3(t)$. The two samples actually consumed by the renderer, $t=0$ and $t=0.5$, are drawn explicitly. The view reads the same `SnakeGeometry` used by the renderer and has no access to movement, timers, score, RNG, collision rules or outcard state.
+
+`DEBUG_MODE` and `CHEATS_ENABLED` default independently to `0` in `src/game_state.h`. `DEBUG_MODE=1` enables collision, lifecycle and audio diagnostics without changing available controls. `CHEATS_ENABLED=1` separately enables R/R3 level advancement through the ordinary scoring and door path; on level 12 it completes the run. The normal-build Technical view is independent of both flags.
 
 ## Technical documentation
 
@@ -124,7 +155,7 @@ RIVEMU_SDK="$HOME/.riv/rivos-sdk.ext2" \
   -exec /usr/lib/libriv.so version
 ```
 
-The source preceding the current module-and-behavior refactor was verified with RIVEMU and `libriv` 0.3.0. The maintained refactor passes the host checks described below; its RISC-V package and smoke run remain release checks, as stated in [Validation](docs/validation.md). For another operating system or architecture, download the matching RIVEMU binary from the [official releases](https://github.com/rives-io/riv/releases) and pass its path to `make`.
+The current normal build and captures were verified with RIVEMU and `libriv` 0.3.0 plus RIV OS SDK 0.3.0, including a 96 MB runtime smoke check. See [Validation](docs/validation.md). For another operating system or architecture, download the matching RIVEMU binary from the [official releases](https://github.com/rives-io/riv/releases) and pass its path to `make`.
 
 ## Building and running
 
@@ -152,7 +183,7 @@ make -C src test
 make -C src smoke
 ```
 
-`strict` checks all production modules with a warning-free C11 analysis in both debug configurations. `test` builds six host-side C checks for the room matrix, all eleven door transitions and backtracking, per-level scoring, body-chain invariants, the cubic B-spline basis, final completion and spawn failure. `smoke` runs the packaged cartridge headlessly for 180 frames.
+`strict` compiles every production module with warning-free C11 analysis in the release, debug-only and cheats-only configurations. `test` builds nine host-side C checks, including the room matrix, all eleven door transitions and backtracking, per-level scoring, body-chain invariants, the cubic basis, constructed spline geometry, Technical-view toggle state, final completion, spawn failure and collision clearance. `smoke` runs the packaged cartridge headlessly for 180 frames.
 
 ## Repository history
 

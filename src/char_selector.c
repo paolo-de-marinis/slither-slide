@@ -153,22 +153,29 @@ static void drawSelectionInstructions(void) {
                   PREVIEW_Y + 30,
                   NORMAL_SCALE,
                   RIV_COLOR_LIGHTRED);
-    riv_draw_text("PRESS ANY KEY to start",
+    riv_draw_text("Z/A1 or E/START to start",
                   RIV_SPRITESHEET_FONT_5X7,
                   RIV_CENTER,
                   CENTER_X,
-                  PREVIEW_Y + 50,
+                  PREVIEW_Y + 42,
                   NORMAL_SCALE,
                   RIV_COLOR_LIGHTRED);
+    riv_draw_text("D/R1: technical view",
+                  RIV_SPRITESHEET_FONT_5X7,
+                  RIV_CENTER,
+                  CENTER_X,
+                  PREVIEW_Y + 54,
+                  NORMAL_SCALE,
+                  RIV_COLOR_LIGHTBLUE);
 
-    riv_draw_text("RIVES Jam #3",
+    riv_draw_text("Paolo De Marinis",
                   RIV_SPRITESHEET_FONT_5X7,
                   RIV_CENTER,
                   CENTER_X,
                   SCREEN_HEIGHT - 30,
                   NORMAL_SCALE,
                   RIV_COLOR_GREY);
-    riv_draw_text("Theme: Slide",
+    riv_draw_text("Derived from RIVES Jam #3",
                   RIV_SPRITESHEET_FONT_5X7,
                   RIV_CENTER,
                   CENTER_X,
@@ -195,8 +202,8 @@ void updateSkinSelection(void) {
 static bool startButtonPressed(void) {
     return riv->keys[RIV_GAMEPAD_A1].press || riv->keys[RIV_GAMEPAD_A2].press ||
            riv->keys[RIV_GAMEPAD_A3].press || riv->keys[RIV_GAMEPAD_A4].press ||
-           riv->keys[RIV_GAMEPAD_L1].press || riv->keys[RIV_GAMEPAD_R1].press ||
-           riv->keys[RIV_GAMEPAD_L2].press || riv->keys[RIV_GAMEPAD_R2].press ||
+           riv->keys[RIV_GAMEPAD_L1].press || riv->keys[RIV_GAMEPAD_L2].press ||
+           riv->keys[RIV_GAMEPAD_R2].press ||
            riv->keys[RIV_GAMEPAD_SELECT].press || riv->keys[RIV_GAMEPAD_START].press;
 }
 

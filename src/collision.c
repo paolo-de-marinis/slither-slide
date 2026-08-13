@@ -1,10 +1,11 @@
 #include "collision.h"
 
-#include "caterpillar_char.h"
-#include "char_selector.h"
 #include "levels.h"
-#include "snake_char.h"
+#include "snake_geometry.h"
 #include "walls.h"
+
+/* Preserve the published gameplay geometry independently of the selected skin. */
+static const float HEAD_COLLISION_RADIUS = 8.0f * 0.67f;
 
 static bool collidesWithRoomEdge(float headX,
                                  float headY,
@@ -21,8 +22,7 @@ static bool collidesWithBody(const GameData *state,
                              float headRadius);
 
 float collisionHeadRadius(void) {
-    return getCurrentSkin() == SKIN_SNAKE ? SNAKE_HEAD_COLLISION_RADIUS
-                                          : CATERPILLAR_HEAD_COLLISION_RADIUS;
+    return HEAD_COLLISION_RADIUS;
 }
 
 bool collisionAtNextHead(const GameData *state, riv_vec2i nextHeadPosition) {
@@ -89,7 +89,16 @@ static bool collidesWithWall(riv_vec2i nextHeadPosition,
                              float headY,
                              float headRadius) {
     for (int index = 0; index < wallsGetCount(); index++) {
-        if (!wallCircleContact(wallsGet(index), headX, headY, headRadius, NULL)) {
+        const Wall *wall = wallsGet(index);
+        Wall drawnObstacle;
+        if (index >= WALL_SEGMENTS_PER_SIDE * WALL_SIDE_COUNT && wall != NULL) {
+            drawnObstacle = (Wall){wall->x + WALL_DRAW_INSET,
+                                   wall->y + WALL_DRAW_INSET,
+                                   wall->width - 2 * WALL_DRAW_INSET,
+                                   wall->height - 2 * WALL_DRAW_INSET};
+            wall = &drawnObstacle;
+        }
+        if (!wallCircleContact(wall, headX, headY, headRadius, NULL)) {
             continue;
         }
         if (DEBUG_MODE) {
@@ -108,7 +117,7 @@ static bool collidesWithBody(const GameData *state,
                              float headRadius) {
     const int segmentSamples = 4;
     for (int index = 4; index < state->jointCount - 1; index++) {
-        float collisionRadius = getSnakeBodyWidth(index) + headRadius;
+        float collisionRadius = snakeBodyWidth(index) + headRadius;
         for (int sample = 0; sample <= segmentSamples; sample++) {
             float t = sample / (float)segmentSamples;
             float segmentX = state->joints[index - 1].x * (1.0f - t) +

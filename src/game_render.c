@@ -3,24 +3,22 @@
 #include "caterpillar_char.h"
 #include "char_selector.h"
 #include "collectible.h"
-#include "collision.h"
 #include "game_state.h"
 #include "levels.h"
 #include "snake_char.h"
+#include "technical_view.h"
 #include "ui_constants.h"
 #include "walls.h"
 
-#include <math.h>
 #include <stdio.h>
 
 static void drawHud(void);
 static void drawCharacter(void);
-static void drawDebugGeometry(void);
 static void drawGameOver(void);
 static void drawGameCompleted(void);
 static void drawDitheredOverlay(uint32_t color);
 
-void gameDraw(void) {
+void gameDraw(const DeveloperControls *developerControls) {
     riv_clear(RIV_COLOR_DARKSLATE);
     wallsDraw();
 
@@ -32,8 +30,16 @@ void gameDraw(void) {
     drawHud();
     collectibleDraw(&game, game.collectibleRotation);
     drawCharacter();
-    if (DEBUG_MODE) {
-        drawDebugGeometry();
+    if (developerControls->technicalViewEnabled && game.state == GAME_STATE_PLAYING &&
+        getCurrentSkin() == SKIN_SNAKE) {
+        const SnakeGeometry *geometry = snakeBodyGeometry();
+        technicalViewDraw(game.joints,
+                          game.jointCount,
+                          geometry,
+                          developerControlsActiveSpan(
+                              developerControls, riv->frame, geometry->controlPointCount),
+                          developerControlsSpanParameter(riv->frame),
+                          developerControls->manualSpanSelection);
     }
 
     if (game.state == GAME_STATE_COMPLETED) {
@@ -80,37 +86,6 @@ static void drawCharacter(void) {
                             game.joints[0].angle,
                             CATERPILLAR_HEAD_COLLISION_RADIUS);
     }
-}
-
-static void drawDebugGeometry(void) {
-    for (int index = 2; index < game.jointCount - 1; index++) {
-        uint32_t transparentPink = (RIV_COLOR_PINK & 0x00FFFFFF) | 0x40000000;
-        riv_draw_circle_fill(game.joints[index].x,
-                             game.joints[index].y,
-                             2,
-                             RIV_COLOR_PINK);
-        riv_draw_circle_fill(game.joints[index].x,
-                             game.joints[index].y,
-                             TILE_SIZE / 2,
-                             transparentPink);
-    }
-
-    for (int index = 0; index < game.jointCount; index++) {
-        float width = getSnakeBodyWidth(index);
-        float angle = game.joints[index].angle;
-        float rightX = game.joints[index].x + cosf(angle + PI / 2.0f) * width;
-        float rightY = game.joints[index].y + sinf(angle + PI / 2.0f) * width;
-        float leftX = game.joints[index].x + cosf(angle - PI / 2.0f) * width;
-        float leftY = game.joints[index].y + sinf(angle - PI / 2.0f) * width;
-        riv_draw_circle_fill((int)rightX, (int)rightY, 2, RIV_COLOR_BLUE);
-        riv_draw_circle_fill((int)leftX, (int)leftY, 2, RIV_COLOR_BLUE);
-    }
-
-    uint32_t transparentOrange = (RIV_COLOR_ORANGE & 0x00FFFFFF) | 0x40000000;
-    riv_draw_circle_fill(game.joints[0].x,
-                         game.joints[0].y,
-                         collisionHeadRadius(),
-                         transparentOrange);
 }
 
 static void drawDitheredOverlay(uint32_t color) {

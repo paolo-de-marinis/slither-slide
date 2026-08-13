@@ -121,10 +121,10 @@ void wallsDraw(void) {
         float screenX = 0.0f;
         float screenY = 0.0f;
         worldToScreen(wall->x, wall->y, &screenX, &screenY);
-        riv_draw_rect_fill(screenX + 1,
-                           screenY + 1,
-                           wall->width - 2,
-                           wall->height - 2,
+        riv_draw_rect_fill(screenX + WALL_DRAW_INSET,
+                           screenY + WALL_DRAW_INSET,
+                           wall->width - 2 * WALL_DRAW_INSET,
+                           wall->height - 2 * WALL_DRAW_INSET,
                            RIV_COLOR_DARKGREEN);
     }
 }

@@ -1,6 +1,8 @@
 #ifndef GAME_RENDER_H
 #define GAME_RENDER_H
 
-void gameDraw(void);
+#include "developer_controls.h"
+
+void gameDraw(const DeveloperControls *developerControls);
 
 #endif

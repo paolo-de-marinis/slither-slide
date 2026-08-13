@@ -5,7 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 
-float getSnakeBodyWidth(int segmentIndex) {
+float snakeBodyWidth(int segmentIndex) {
     (void)segmentIndex;
     return 4.0f;
 }

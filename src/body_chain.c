@@ -1,6 +1,6 @@
 #include "body_chain.h"
 
-#include "snake_char.h"
+#include "snake_geometry.h"
 #include "walls.h"
 
 #include <math.h>
@@ -92,7 +92,7 @@ static void resolveJointOverlap(GameData *state, int jointIndex) {
         float deltaY = state->joints[jointIndex].y - state->joints[otherIndex].y;
         float distance = sqrtf(deltaX * deltaX + deltaY * deltaY);
         float combinedWidth =
-            getSnakeBodyWidth(jointIndex) + getSnakeBodyWidth(otherIndex);
+            snakeBodyWidth(jointIndex) + snakeBodyWidth(otherIndex);
         float minimumDistance = combinedWidth * 0.8f;
         if (distance >= minimumDistance || distance <= NORMAL_EPSILON) {
             continue;
@@ -122,7 +122,7 @@ static void resolveJointOverlap(GameData *state, int jointIndex) {
 }
 
 static void pushJointFromWalls(GameData *state, int jointIndex) {
-    float collisionWidth = getSnakeBodyWidth(jointIndex);
+    float collisionWidth = snakeBodyWidth(jointIndex);
     for (int wallIndex = 0; wallIndex < wallsGetCount(); wallIndex++) {
         const Wall *wall = wallsGet(wallIndex);
         WallContact contact;

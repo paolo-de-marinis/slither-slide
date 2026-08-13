@@ -3,7 +3,7 @@
 #include "audio.h"
 #include "collectible_render.h"
 #include "levels.h"
-#include "snake_char.h"
+#include "snake_geometry.h"
 #include "ui_constants.h"
 #include "walls.h"
 
@@ -213,15 +213,15 @@ void collectiblePushFromBody(const GameData *state) {
 
     const float sideOffsets[] = {-PI / 2.0f, PI / 2.0f};
     for (int index = 2; index < state->jointCount - 1; index++) {
-        float bodyRadius = getSnakeBodyWidth(index) * 0.67f;
+        float bodyRadius = snakeBodyWidth(index) * 0.67f;
         for (int side = 0; side < 2; side++) {
             float profileX = 0.0f;
             float profileY = 0.0f;
-            getOffsetPosition(state->joints,
-                              index,
-                              sideOffsets[side],
-                              &profileX,
-                              &profileY);
+            snakeOffsetPosition(state->joints,
+                                index,
+                                sideOffsets[side],
+                                &profileX,
+                                &profileY);
 
             float deltaX = collectible.physics.x - profileX;
             float deltaY = collectible.physics.y - profileY;

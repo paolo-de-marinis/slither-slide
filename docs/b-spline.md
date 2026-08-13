@@ -83,15 +83,15 @@ L_i=J_i+w_i\mathbf n_i,\qquad
 R_i=J_i-w_i\mathbf n_i.
 ```
 
-This is the vector form of `getOffsetPosition()`, which evaluates the same construction using angles $\theta_i+\pi/2$ and $\theta_i-\pi/2$.
+This is the vector form of `snakeOffsetPosition()`, which evaluates the same construction using angles $\theta_i+\pi/2$ and $\theta_i-\pi/2$.
 
-`getSnakeBodyWidth()` makes the profile non-uniform:
+`snakeBodyWidth()` makes the profile non-uniform:
 
 - 8 pixels at the head;
 - 7 pixels at the next joint;
 - then a gradual taper from 6 pixels to a minimum of 4.
 
-`drawSnakeBody()` orders the control polygon as one side from tail to head, a forward head point, and the other side from head to tail. For $m$ joints this produces $2m+1$ profile controls before the closure points are appended. The center joints are therefore not the B-spline control points: the spline acts on the offset outline.
+`snakeGeometryBuild()` orders the control polygon as one side from tail to head, a forward head point, and the other side from head to tail. For $m$ joints this produces $2m+1$ profile controls. The center joints are therefore not the B-spline control points: the spline acts on the offset outline.
 
 ## 4. Uniform cubic B-spline
 
@@ -162,7 +162,7 @@ Thus the underlying piecewise-cubic curve is $C^2$ across ordinary uniform spans
 
 ## 5. Periodic closure and sampling
 
-The outline is closed by appending the first three control points to the end of the array. The last spans can then reuse the ordinary four-point formula and meet the beginning of the curve without a separate endpoint branch.
+The outline is closed by taking the four control indices for each span modulo the control-point count. This is algebraically equivalent to appending the first three controls, but avoids maintaining a second extended array. The last spans therefore reuse the ordinary four-point formula and meet the beginning of the curve without a separate endpoint branch.
 
 Each span is sampled at
 
@@ -174,7 +174,7 @@ The endpoint $t=1$ is omitted because it is the start of the next span. Two samp
 
 ## 6. From samples to pixels
 
-The sample array follows the two sides of the closed body. `drawSmoothCurve()` pairs samples from opposite sides and fills each adjacent pair with two triangles. A second pass draws the closed edge.
+The sample array produced by `snakeGeometryBuild()` follows the two sides of the closed body. `drawSmoothCurve()` consumes that array, pairs samples from opposite sides and fills each adjacent pair with two triangles. A second pass draws the closed edge.
 
 This is a rasterization choice, not an additional spline operation. The head, tongue and scale decorations are drawn separately.
 
@@ -185,7 +185,35 @@ Gameplay collision intentionally uses a cheaper approximation:
 
 The collision code does not test the rendered B-spline triangles. Consequently, the visible surface and the collision surface are close but not identical.
 
-## 7. Design choices and trade-offs
+## 7. Runtime Technical view
+
+D/R1 toggles a normal-build Technical view without restarting the cartridge. The renderer and the view consume the same `SnakeGeometry` object; the visualization does not reconstruct the curve independently. Its layers make the complete pipeline inspectable:
+
+![Runtime Technical view over the live snake geometry](media/slither-slide-technical-view.png)
+
+```math
+\text{dynamic joints}\longrightarrow\text{lateral profile}
+\longrightarrow\text{control polygon}\longrightarrow\text{B-spline}
+\longrightarrow\text{triangulation}.
+```
+
+The colors distinguish center joints, lateral controls, the control polygon and the sampled curve. Every control point in the complete closed polygon remains light blue. The four orange rings are a second, local annotation: they identify only the four controls $P_i,\ldots,P_{i+3}$ that contribute to the selected span and do not represent the full control-point set. All actual renderer samples at $t=0$ and $t=0.5$ are marked. A white point evaluates
+
+```math
+C_i(t)=\sum_{k=0}^{3}b_k(t)P_{i+k}
+```
+
+for a frame-derived $t\in[0,1)$. A panel labels the light-blue set as `ALL CONTROLS`, the orange subset as `ACTIVE SPAN P_i..P_i+3`, and reports the span, $t$ and the four current weights. This animated point is an explanatory evaluation of the same basis, whereas the yellow points are the fixed samples used for triangulation.
+
+![Active-span controls, mobile curve point and basis-weight panel](media/slither-slide-technical-view-detail.png)
+
+The yellow renderer samples remain fixed at $t=0$ and $t=0.5$ within every span. The white $C_i(t)$ point is separate: it moves continuously through the selected span for explanation and is not an additional triangulation sample.
+
+Selection is automatic until the first A/F or L2/R2 press. L2 selects span $i-1$ and R2 selects span $i+1$, so one press moves the four-control window by one control point rather than four. Both directions wrap modulo `controlPointCount`. Manual selection is normalized against the live count on every lookup and navigation event, including after growth changes the number of controls; $C_i(t)$ keeps animating inside the selected span.
+
+The toggle and manual span index belong to a small app-level `DeveloperControls` structure rather than `GameData`. `technicalViewDraw()` receives only read-only joints, the shared geometry, the selected span and its display parameter. It cannot update movement, level clocks, score, RNG, collision state, audio or the JSON outcard. The view is shown only for the snake skin; the caterpillar renderer is not presented as a B-spline construction.
+
+## 8. Design choices and trade-offs
 
 | Choice in Slither Slide | Mathematical effect | Practical reason / trade-off |
 |---|---|---|
@@ -194,17 +222,17 @@ The collision code does not test the rendered B-spline triangles. Consequently, 
 | Normal offsets $J_i\pm w_i\mathbf n_i$ | Converts a centerline into a two-sided profile | Body shape follows local orientation |
 | Tapered $w_i$ | Varies the profile envelope along the chain | Recognisable head and narrowing tail |
 | Uniform cubic B-spline | Local, $C^2$-smooth approximation | Smooth profile with a small fixed basis |
-| Repeating the first three control points | Periodic four-point evaluation | Closed body without endpoint special cases |
+| Control indices taken modulo $2m+1$ | Periodic four-point evaluation | Closed body without endpoint special cases |
 | Two samples per span | Piecewise-linear raster approximation | Bounded drawing cost |
 | Simpler collision primitives | Approximate rather than exact surface collision | Keeps gameplay tests independent of rendering density |
 
-## 8. Mathematical authorship and implementation boundary
+## 9. Mathematical authorship and implementation boundary
 
 Paolo De Marinis selected the B-spline family and mathematically configured how it is used for the snake profile: the control-point construction, closure, degree/basis and sampling choice were integrated into the game and personally validated. The related implementation code was produced with Cursor assistance within the broader Cursor-assisted development workflow.
 
-The maintained repository makes those choices inspectable in `src/spline_math.c` and `src/snake_char.c`, and shows how they interact with the joint constraints in `src/body_chain.c`.
+The maintained repository makes those choices inspectable in `src/spline_math.c`, `src/snake_geometry.c` and `src/snake_char.c`, and shows how they interact with the joint constraints in `src/body_chain.c`.
 
-## 9. Study sources and attribution
+## 10. Study sources and attribution
 
 ### Mathematical background
 
@@ -230,17 +258,20 @@ The comparison source and Slither Slide share a recognisable high-level structur
 
 The maintained Slither Slide implementation is C code for RIVES and contains a grid-driven head, its own link relaxation, non-neighbour and wall corrections, an explicitly evaluated uniform cubic B-spline, paired-triangle filling, fixed-capacity buffers and cartridge-specific collision approximations. The comparison source remains under its own MIT license; citing it does not license this repository.
 
-## 10. Relevant code
+## 11. Relevant code
 
 - `JointPoint` in `src/joint_point.h` — center position and local angle.
 - `bodyChainUpdate()`, `followPreviousJoint()`, `resolveJointOverlap()` and `pushJointFromWalls()` in `src/body_chain.c` — evolving center chain and final tangent reconstruction.
-- `getSnakeBodyWidth()` — width profile.
-- `getOffsetPosition()` — center-to-outline transformation.
-- `drawSnakeBody()` — closed control polygon.
+- `snakeBodyWidth()` — width profile.
+- `snakeOffsetPosition()` — center-to-outline transformation.
+- `snakeGeometryBuild()` — closed control polygon and the two renderer samples per span.
+- `snakeGeometryEvaluateSpan()` — periodic four-control evaluation at arbitrary $t\in[0,1]$.
+- `drawSnakeBody()` — consumption and rasterization of the shared geometry.
 - `cubicUniformBSplineBasis()` in `src/spline_math.c` — the four cubic uniform basis weights.
-- `drawSmoothCurve()` — closure, sampling, fill and outline.
+- `drawSmoothCurve()` — paired-triangle fill and sampled outline.
+- `technicalViewDraw()` — read-only display of the pipeline, active span and weights.
 
-## 11. Implementation limits
+## 12. Implementation limits
 
 - Sampling is fixed at two points per span.
 - Control and sample coordinates are converted to integers before rasterization.
@@ -248,4 +279,4 @@ The maintained Slither Slide implementation is C code for RIVES and contains a g
 - Buffers are statically sized from `MAX_JOINTS`.
 - Collision geometry approximates rather than exactly reproduces the rendered spline surface.
 
-The host-side mathematical checks verify non-negativity and partition of unity of the four basis weights at 101 points in $[0,1]$, their endpoint and exact midpoint values, the final head anchor and the tangent formula for every joint in a controlled chain. They verify implementation invariants; they do not amount to a proof of stability for every possible joint configuration.
+The host-side mathematical checks verify non-negativity and partition of unity of the four basis weights at 101 points in $[0,1]$, their endpoint and exact midpoint values, geometry output counts, periodic closure at every span, agreement between stored samples and direct evaluation, the final head anchor and the tangent formula for every joint in a controlled chain. A separate toggle-state test verifies disabled initialization and press-edge switching. These are implementation invariants; they do not amount to a proof of stability for every possible joint configuration.

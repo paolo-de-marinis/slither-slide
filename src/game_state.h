@@ -33,6 +33,10 @@ enum {
 #define DEBUG_MODE 0
 #endif
 
+#ifndef CHEATS_ENABLED
+#define CHEATS_ENABLED 0
+#endif
+
 typedef struct {
     GameState state;
     int ticks;

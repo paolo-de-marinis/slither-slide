@@ -10,21 +10,25 @@ The source is divided by responsibility rather than by individual function:
 
 | Module | Responsibility |
 |---|---|
-| `main.c` | RIVES dimensions, target frame rate and frame loop |
+| `main.c` | RIVES dimensions, input tracking, target frame rate and frame loop |
+| `controls.h` | canonical Technical-view and cheat-button mapping |
+| `developer_controls.c` | app-level runtime state for the Technical-view toggle and span selection |
 | `game_state.h` | `GameData`, global constants and the single state declaration |
-| `game.c` | initialization, frame orchestration, debug progression and terminal states |
+| `game.c` | initialization, frame orchestration, optional cheat progression and terminal states |
 | `snake_motion.c` | D-pad input, logical head/tail movement, growth and collection events |
 | `collision.c` | head radius and collision predicates |
 | `body_chain.c` | position-based joint constraints and tangent reconstruction |
 | `scoring.c` | per-level time, persistent scores and JSON outcard |
-| `game_render.c` | HUD, character selection, debug overlay and ending panels |
+| `game_render.c` | HUD, character selection, Technical-view dispatch and ending panels |
 | `levels.c` | level table, completion state, doors, transitions and obstacle declarations |
 | `room_layout.c` | the 4 × 3 room matrix and adjacency relation |
 | `collectible.c` | apple/coin state, spawn and short physics response |
 | `collectible_render.c` | apple and coin primitive rendering |
 | `walls.c` | wall storage, circle/rectangle contacts and wall rendering |
-| `snake_char.c` | snake profile and B-spline rasterization |
+| `snake_geometry.c` | pure profile construction, periodic B-spline evaluation and sampling |
+| `snake_char.c` | sampled-geometry rasterization, scales, head and tongue |
 | `spline_math.c` | cubic uniform B-spline basis |
+| `technical_view.c` | read-only visualization of the spline construction and parametrization |
 | `caterpillar_char.c` | alternate character renderer |
 | `camera.c` | world-to-screen transformation and eased room transitions |
 | `char_selector.c` | initial skin menu |
@@ -54,20 +58,20 @@ The implementation maintains the following invariants:
 5. A completed level has a final score, a frozen elapsed time and no collectible.
 6. A completion bonus is incorporated exactly once into that level's stored score.
 
-The single global `game` object is declared in `game_state.h` and defined in `game.c`. Computational modules receive a `GameData *` or `const GameData *` when operating on it; this keeps data flow explicit even though the cartridge has only one game instance.
+The single global `game` object is declared in `game_state.h` and defined in `game.c`. Computational modules receive a `GameData *` or `const GameData *` when operating on it; this keeps data flow explicit even though the cartridge has only one game instance. `DeveloperControls` is owned separately by `main()` and contains the Technical-view toggle plus its manual span-selection state. Neither `developer_controls.c` nor `technical_view.c` receives a `GameData *`, so the view cannot mutate gameplay or outcard state.
 
 ## 3. Frame flow
 
 Execution starts in `main.c`:
 
 1. configure the 256 × 256 output and 60 FPS target;
-2. initialize audio and the game;
-3. for each successful `riv_present()`, call `gameUpdate()`, `gameDraw()` and `playBackgroundMusic()`.
+2. initialize audio, the game and the disabled-by-default developer-control state;
+3. for each successful `riv_present()`, update the D/R1 toggle, then call `gameUpdate()`, `gameDraw()` and `playBackgroundMusic()`.
 
 During the selection screen, `gameUpdate()` delegates to `updateSkinSelection()`. During play, one frame performs:
 
 1. advance the global tick count;
-2. process the optional debug level skip;
+2. process the optional cheat level skip when `CHEATS_ENABLED=1`;
 3. advance tongue animation for the snake skin;
 4. read input and, when the movement timer expires, move the logical snake;
 5. update the camera;
@@ -75,7 +79,7 @@ During the selection screen, `gameUpdate()` delegates to `updateSkinSelection()`
 7. update the active level score and the outcard;
 8. integrate collectible physics and test body interaction.
 
-Rendering is kept in `game_render.c`. It clears the frame, draws the current walls, then draws either the selection menu or the HUD, collectible and character. Ending panels are overlays on the last game frame.
+Rendering is kept in `game_render.c`. It clears the frame, draws the current walls, then draws either the selection menu or the HUD, collectible and character. When the snake skin and Technical view are active, it passes the renderer's current `SnakeGeometry` to `technicalViewDraw()`. Ending panels are overlays on the last game frame.
 
 ## 4. Logical movement and continuous geometry
 
@@ -88,7 +92,7 @@ The cartridge deliberately uses two body representations:
 
 `bodyChainUpdate()` treats the logical head as a boundary condition. It first anchors joint zero, then applies follower spacing, non-neighbour overlap resolution and wall corrections to the remaining chain. It anchors joint zero again after those corrections and finally recomputes every angle from the resulting geometry. The direct overlap pass is quadratic in the joint count; current playable lengths make the simple implementation preferable to a spatial index.
 
-The mathematical construction of the profile and spline is developed separately in [Mathematics of the procedural body](b-spline.md).
+The mathematical construction of the profile and spline is developed separately in [Mathematics of the procedural body](b-spline.md). `snakeGeometryBuild()` is the single construction path: both ordinary rasterization and the Technical view consume its control-point and sample arrays.
 
 ## 5. Collision geometry
 
@@ -98,7 +102,7 @@ The mathematical construction of the profile and spline is developed separately 
 - a circle against each non-empty axis-aligned wall rectangle;
 - a circle against five uniformly spaced points on each sufficiently distant body segment.
 
-`collisionHeadRadius()` selects an explicit radius for the current skin: `SNAKE_HEAD_COLLISION_RADIUS` or `CATERPILLAR_HEAD_COLLISION_RADIUS`. The same value is used for movement collision, collection distance and the debug overlay. The visible decoration may extend beyond this logical radius; the collision surface is intentionally simpler than the rendered surface.
+`collisionHeadRadius()` returns the skin-independent historical gameplay radius `8 × 0.67 = 5.36` pixels. The same value is used for movement collision and collection distance. Keeping visual skin dimensions separate from this logical radius prevents a cosmetic choice from changing level clearance. The visible decoration may extend beyond the logical radius; the collision surface is intentionally simpler and slightly more forgiving than the rendered surface. Interior-obstacle head tests use the same one-pixel inset rectangle that `wallsDraw()` fills, so the level-2 cube cannot trigger against an invisible outer pixel. Boundary-wall handling is unchanged.
 
 `wallCircleContact()` centralizes the closest-point calculation used by head collision, body correction, spawn exclusion and collectible physics. This avoids four separate versions of the same circle/rectangle predicate.
 
@@ -166,15 +170,18 @@ It then makes one `riv_rand_uint()` call to choose an index. The scan order is i
 
 When the body profile touches the object, the object receives a short normal impulse. Velocity is damped every frame, reflected at room bounds and wall contacts, and set to zero below a fixed threshold.
 
-## 9. Debug system
+## 9. Technical view, diagnostics and cheats
 
-`DEBUG_MODE` in `game_state.h` defaults to `0`. When enabled:
+The runtime Technical view is compiled into the normal cartridge, starts disabled and toggles with D/R1. It is restricted to the snake skin and shows:
 
-- collision, lifecycle and music diagnostics are printed;
-- `drawDebugGeometry()` shows joint centers, profile offsets and the selected skin's head radius;
-- R3 completes the current level through `checkDoorState()` and enters the next room through `initializeLevel()`; at level 12 it calls `gameComplete()`.
+- the center-chain joints;
+- every lateral profile control in light blue and their closed control polygon;
+- the resulting B-spline and every renderer sample at $t=0$ and $t=0.5$;
+- four orange rings around only the controls $P_i,\ldots,P_{i+3}$ of the active span, its point $C_i(t)$ and the four basis weights.
 
-The debug shortcut therefore exercises the same completion, score and door operations as normal collection.
+Its data flow is read-only and stops at drawing calls. The animation parameter is derived from `riv->frame`; it does not consume RIVES entropy or update `GameData`. Automatic span selection continues until the first A/F or L2/R2 press. Manual navigation changes $i$ by exactly one in either direction and wraps against the live `controlPointCount`, including when growth changes that count.
+
+`DEBUG_MODE` separately enables collision, lifecycle and music logging. `CHEATS_ENABLED` separately makes R/R3 complete the current level through `checkDoorState()` and enter the next room through `initializeLevel()`; at level 12 it calls `gameComplete()`. The cheat therefore exercises the same completion, score and door operations as normal collection, but neither compile-time flag controls the Technical view.
 
 ## 10. RIVES integration
 
@@ -188,7 +195,7 @@ The debug shortcut therefore exercises the same completion, score and door opera
 
 ## 11. Remaining limits
 
-- Debug mode is selected at build time.
+- Diagnostics and cheats are selected independently at build time; the Technical view is a runtime toggle.
 - The rendered B-spline triangles are not the collision surface.
 - `MAX_JOINTS` is a fixed upper bound substantially larger than ordinary play requires.
 - The end states schedule cartridge exit and do not offer an in-process restart.

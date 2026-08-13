@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #define WALL_SEGMENTS_PER_SIDE 8
+#define WALL_DRAW_INSET 1.0f
 #define MAX_WALLS (WALL_SEGMENTS_PER_SIDE * 4 + 10)
 
 typedef enum {
