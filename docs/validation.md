@@ -1,6 +1,6 @@
 # Validation
 
-The host checks cover rules and geometry with an ordinary C11 compiler. RIVEMU and the RIV OS SDK are still required for the real RISC-V build, packaging and runtime checks.
+The host checks cover rules and geometry with an ordinary C11 compiler. The repository does not vendor the RIV API header: `strict` and `test` obtain `riv.h` from the installed official RIV SDK and copy it only into a temporary build directory. RIVEMU and the RIV OS SDK are therefore required both for those checks and for the real RISC-V build, packaging and runtime checks.
 
 ## Host compilation
 
@@ -74,7 +74,7 @@ make -C src smoke
 
 The latest recorded normal build used RIVEMU/libriv 0.3.0 and RIV OS SDK 0.3.0. Each module was compiled with `riv-opt-flags -Ospeed`, the executable was processed by `riv-strip`, and the packaged cartridge completed a 180-frame headless run at the official 96 MB runtime limit.
 
-The resulting `snake.sqfs` measured 28,672 bytes, below the 524,288-byte cartridge limit.
+The resulting `snake.sqfs` measured 28,672 bytes, below the current 262,144-byte RIVES upload limit.
 
 ## Visual check
 

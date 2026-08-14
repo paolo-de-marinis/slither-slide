@@ -17,7 +17,7 @@ The itch.io submission was later removed, so the Jam page now lists six survivin
 
 This is the maintained, post-jam version of the cartridge. The exact source snapshot submitted in December 2024 is no longer retained. The present code includes later fixes, tests, documentation and refactoring; the original published cartridge remains available at the RIVES link above.
 
-The original game was developed in C with Cursor assistance. Paolo De Marinis designed the mechanics and gameplay, wrote and modified parts of the code, and handled integration, testing and refinement. He selected and configured the B-spline construction used for the snake profile; its implementation was produced with assistance and then integrated and validated by him. Current maintenance also uses OpenAI Codex.
+The original game was developed in C with Cursor assistance. Paolo De Marinis designed the mechanics and gameplay, wrote and modified parts of the code, and handled integration, testing and refinement. He selected and configured the B-spline construction used for the snake profile; its implementation was produced with assistance and then integrated and validated by him. Since 2026, OpenAI Codex has assisted with repository maintenance, including refactoring, tests and documentation. Paolo reviewed, integrated and validated these changes.
 
 ## Gameplay and controls
 
@@ -86,6 +86,8 @@ Running an existing cartridge requires [RIVEMU](https://rives.io/docs/riv/gettin
 ~/.riv/rivos-sdk.ext2
 ~~~
 
+The repository deliberately does not vendor `riv.h`; builds use the API header supplied by the installed RIV SDK. Host-side `strict` and `test` checks copy that SDK header only into a temporary build directory.
+
 Build and run:
 
 ~~~sh
@@ -118,9 +120,10 @@ make -C src smoke
 - [Code overview](docs/code-overview.md)
 - [Validation](docs/validation.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [SEQT GPLv3 §7 exception](SEQT_EXCEPTION.md)
 
 Related project: [Bomb Flip source](https://github.com/paolo-de-marinis/bomb-flip) · [original Bomb Flip cartridge](https://app.rives.io/cartridges/5932d82f5827)
 
 ## License
 
-Except for the material listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the source, documentation and original assets are Copyright © 2024–2026 Paolo De Marinis and licensed under the [GNU General Public License v3.0 or later](LICENSE).
+Except for the third-party material listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the source, documentation and original assets are Copyright © 2024–2026 Paolo De Marinis and licensed under the [GNU General Public License, version 3 or later](LICENSE), with the narrow [SEQT additional permission](SEQT_EXCEPTION.md).

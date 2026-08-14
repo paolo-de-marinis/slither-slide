@@ -1,0 +1,24 @@
+{
+  "name": "Slither Slide",
+  "summary": "A multi-room snake game with a procedural closed B-spline body.",
+  "description": "Slither Slide is a multi-room snake and caterpillar cartridge and the runner-up in RIVES Jam #3. Choose a character, collect every item in a room and pass through the doors that open. The snake uses a procedural closed cubic B-spline body. Technical View exposes the control polygon, selected span and renderer samples without changing gameplay.\n\nControls:\n- Up/Down or D-pad: choose a character\n- Z/A1 or E/START: begin\n- Arrow keys or D-pad: move\n- D or R1: toggle Technical View\n- A/F or L2/R2: select the previous/next B-spline span",
+  "tags": [
+    "snake",
+    "caterpillar",
+    "arcade",
+    "2d",
+    "procedural",
+    "spline"
+  ],
+  "authors": [
+    {
+      "name": "Paolo De Marinis",
+      "link": "https://x.com/PaoloCTSI"
+    }
+  ],
+  "links": [
+    "https://github.com/paolo-de-marinis/slither-slide",
+    "https://app.rives.io/cartridges/7654435bf067",
+    "https://itch.io/jam/rives-jam-3"
+  ]
+}
