@@ -2,7 +2,10 @@
 
 ![Slither Slide: procedural snake gameplay and runtime Technical view](docs/media/slither-slide-hero.png)
 
-Slither Slide is a multi-room snake game built as a RIVES cartridge. The head moves on a tile grid, while a chain of floating-point joints and a closed cubic B-spline give the body its curved outline.
+Slither Slide is a multi-room snake game built as a RIVES cartridge. Its twelve rooms occupy a
+4 × 3 lattice inside one 1024 × 768 world. The head moves on a global tile grid, while walls,
+collectible physics and a chain of floating-point joints use geometric world coordinates. A
+closed cubic B-spline gives the projected body its curved outline.
 
 The cartridge placed **2nd out of 7 entries** in RIVES Jam #3 (theme: *Slide*).
 
@@ -57,6 +60,31 @@ The remaining modules have narrow responsibilities:
 - `camera.c`, `game_render.c`, `char_selector.c` and `audio.c` handle presentation.
 
 The code is procedural C. State is explicit, functions are grouped by responsibility, and the frame order can be followed without an object hierarchy.
+
+## How space is represented
+
+The game has one global 2D world, but not one global tile map. `LEVEL_MATRIX` says where the
+twelve complete rooms are placed. The separate `bodyDirections` array records only the path
+that the snake's tail must follow; it contains neither walls nor collectibles.
+
+If the logical head occupies integer cell $q=(q_x,q_y)$, its geometric world center is
+
+~~~math
+\Phi(q)=(6q_x+3,\ 6q_y+3).
+~~~
+
+Walls are tested as rectangles against this mapped point. A collectible is initially chosen
+from a room-local grid, but the selected center is immediately converted to floating-point
+position and velocity. The curved body is similarly derived from world-space floating-point
+joints rather than from occupied grid cells.
+
+These distinctions matter because a 256-pixel room is not an integer number of 6-pixel snake
+steps: $256=42\cdot6+4$. The room boundary, global snake grid and local spawn grid therefore
+need not align; doors, collection and collision join them through geometric tests.
+
+See [How Slither Slide represents space](docs/spatial-model.md) for the derivation from the room
+matrix to the global world, a complete door-crossing example, the collectible's change of
+representation and the connection with the procedural body.
 
 ## The B-spline construction
 
@@ -116,6 +144,7 @@ make -C src smoke
 
 ## Documentation
 
+- [How Slither Slide represents space](docs/spatial-model.md)
 - [Mathematics of the procedural body](docs/b-spline.md)
 - [Code overview](docs/code-overview.md)
 - [Validation](docs/validation.md)

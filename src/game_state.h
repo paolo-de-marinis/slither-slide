@@ -26,6 +26,7 @@ enum {
     GROWTH_RATE_DEFAULT = 1
 };
 
+/* Global snake lattice. Room edges, walls and collectible physics remain geometric. */
 #define WORLD_TILES_X ((WORLD_WIDTH + TILE_SIZE - 1) / TILE_SIZE)
 #define WORLD_TILES_Y ((WORLD_HEIGHT + TILE_SIZE - 1) / TILE_SIZE)
 
@@ -45,6 +46,7 @@ typedef struct {
     riv_vec2i headPosition;
     riv_vec2i headDirection;
     riv_vec2i tailPosition;
+    /* Successor directions for the tail path, not a general room occupancy map. */
     riv_vec2i bodyDirections[WORLD_TILES_Y][WORLD_TILES_X];
 
     JointPoint joints[MAX_JOINTS];

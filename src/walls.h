@@ -15,6 +15,7 @@ typedef enum {
     WALL_SIDE_COUNT
 } WallSide;
 
+/* Axis-aligned rectangle in global world coordinates. */
 typedef struct {
     float x;
     float y;

@@ -2,10 +2,13 @@
 
 Slither Slide uses two descriptions of the snake at the same time:
 
-- a tile-grid state for movement, doors and game rules;
-- a floating-point joint chain for the body drawn on screen.
+- a global tile-lattice state for movement, doors and game rules;
+- a world-space floating-point joint chain for the animated body.
 
-The B-spline belongs to the second description. It changes the appearance of the body without changing the logical path of the head.
+The B-spline belongs to the second description. At runtime the joint chain is projected to
+screen coordinates before the spline is built. It changes the appearance of the body without
+changing the logical path of the head. The surrounding room, wall, camera and collectible
+representations are derived in [How Slither Slide represents space](spatial-model.md).
 
 ## 1. Joint chain
 
@@ -15,7 +18,8 @@ Let
 J_i=(x_i,y_i),\qquad i=0,\ldots,m-1,
 ~~~
 
-be the ordered joint centers, with $J_0$ at the head. If the logical head occupies grid cell $(q_x,q_y)$ and the tile size is $T$, `bodyChainUpdate()` imposes
+be the ordered world-space joint centers, with $J_0$ at the head. If the logical head occupies
+global snake cell $(q_x,q_y)$ and the tile size is $T$, `bodyChainUpdate()` imposes
 
 ~~~math
 J_0=\left(Tq_x+\frac{T}{2},\ Tq_y+\frac{T}{2}\right).
@@ -74,17 +78,51 @@ R_i=J_i-w_i\mathbf n_i.
 
 `snakeBodyWidth()` uses 8 pixels at the head, 7 at the next joint and then a gradual taper from 6 pixels to a minimum of 4.
 
-`snakeGeometryBuild()` orders the controls as:
+For the mathematical construction, `snakeGeometryBuild()` turns these offset points into one
+ordered control sequence. In the runtime drawing path, `snake_char.c` first translates the
+world joints to screen coordinates and supplies those projected joints to this construction.
+Let
 
-1. one side from tail to head;
-2. one point in front of the head;
-3. the other side from head to tail.
+~~~math
+F=J_0+w_0\mathbf t_0
+~~~
 
-With $m$ joints, the closed polygon contains $2m+1$ controls. The center joints and the B-spline controls are therefore different objects: the controls lie on the offset outline.
+be the additional point in front of the head. With $m$ joints, the geometric controls $P_0,\ldots,P_{2m}$ are ordered as
+
+~~~math
+(P_0,\ldots,P_{2m})=
+\bigl(L_{m-1},\ldots,L_0,F,R_0,\ldots,R_{m-1}\bigr).
+~~~
+
+Thus the outline is traversed in the order
+
+~~~math
+L_{m-1},\ldots,L_0,\ F,\ R_0,\ldots,R_{m-1},
+~~~
+
+from the tail to the head along the left side and back to the tail along the right side. Periodic indexing then connects the final right-tail control to the initial left-tail control.
+
+The $P_j$ are therefore not a third geometric construction. They are the offset points $L_i$ and $R_i$, plus the front control $F$, arranged in outline order. The joint index $i$ follows the centerline from head to tail, whereas the control index $j$ follows the closed outline.
+
+Implementation note: `appendControlPoint()` currently converts each screen-space control
+coordinate to an integer before spline evaluation. The B-spline samples are still computed in
+floating point, and `snake_char.c` converts those samples to integers when calling the RIVES
+drawing functions. This pixel-grid conversion is an implementation detail, not part of the
+mathematical definition or of the control ordering above. Because the camera projection is a
+translation, it preserves the ideal spline shape; truncation is the only raster-specific step
+introduced before evaluation.
 
 ## 3. Cubic uniform B-spline
 
-Each span uses four consecutive controls and a parameter $t\in[0,1)$:
+A B-spline of degree $p$ is globally defined by all its control points:
+
+~~~math
+C(u)=\sum_{j=0}^{n-1}N_{j,p}(u)P_j.
+~~~
+
+Its basis functions have local support: in the interior of any knot span, only $p+1$ consecutive basis functions are non-zero. Here $p=3$, so evaluating one span requires four neighbouring controls. The next span shifts this window by one control, and periodic indexing makes the final windows wrap around the closed polygon. Evaluating four controls at a time is therefore the local evaluation of the full spline, not a partition into independent groups of four.
+
+For Slither Slide's cubic uniform basis, let $t\in[0,1)$ be the local parameter of a span:
 
 ~~~math
 \begin{aligned}
@@ -95,7 +133,7 @@ b_3(t)&=\frac{t^3}{6}.
 \end{aligned}
 ~~~
 
-The span beginning at control $P_i$ is
+In the spline formulas, $P_j$ always denotes an element of this ordered outline sequence, not a center-chain joint $J_i$. The span beginning at control $P_i$ is
 
 ~~~math
 C_i(t)=\sum_{k=0}^{3}b_k(t)P_{i+k}.
@@ -159,7 +197,7 @@ $t=1$ is omitted because it is the $t=0$ sample of the next span. Two samples pe
 
 `snake_char.c` pairs samples from the two sides of the body and fills the strip with triangles. The visible outline is therefore a polygonal raster approximation of the mathematical B-spline.
 
-Collision uses a cheaper description:
+Collision remains in world coordinates and uses a cheaper description:
 
 - a circle for the head against room boundaries and walls;
 - five points on each relevant centerline segment for self-collision.
@@ -170,7 +208,9 @@ The collision surface and the rendered surface are close but are not identical.
 
 ![Runtime Technical view over the live snake geometry](media/slither-slide-technical-view.png)
 
-The Technical view displays the complete construction used in the current frame:
+The Technical view displays the complete construction used in the current frame. It projects
+the world-space joints with the live camera and reads the already projected `SnakeGeometry`
+used by the renderer:
 
 ~~~math
 \text{joints}\longrightarrow\text{offset controls}
@@ -195,7 +235,7 @@ The view reads the same `SnakeGeometry` object as the renderer. Its API receives
 
 | Choice | Effect | Reason |
 | --- | --- | --- |
-| Grid head and floating-point joints | separates rules from appearance | predictable input with curved motion |
+| global grid head and world-space floating-point joints | separates rules from appearance | predictable input with curved motion |
 | hard extension and soft compression | limits link length without a rigid chain | stable following |
 | normal offsets $J_i\pm w_i\mathbf n_i$ | turns a centerline into a profile | body follows local orientation |
 | tapered $w_i$ | narrows the profile toward the tail | readable character shape |

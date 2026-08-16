@@ -17,6 +17,7 @@
 #define APPLE_RADIUS 7.0f
 #define COIN_RADIUS 16.0f
 
+/* Continuous world-space state after a room-local spawn cell is selected. */
 typedef struct {
     float x;
     float y;

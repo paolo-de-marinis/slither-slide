@@ -20,8 +20,8 @@ This order matters. Input is read from the RIVES key state, gameplay advances on
 
 The main gameplay state is the global `GameData game` declared in `game.c` and described in `game_state.h`. It contains:
 
-- logical head, tail and direction data on the tile grid;
-- the floating-point joint chain used for drawing;
+- logical head, tail and direction data on the global snake lattice;
+- the world-space floating-point joint chain used for animation and drawing;
 - movement timers and animation state;
 - per-level items, completion flags, elapsed time and score;
 - the current lifecycle state.
@@ -38,6 +38,23 @@ The four lifecycle states are character selection, active play, game over and co
 
 An early return stops the remainder of the frame when a collision, completion or initialization failure changes the game state.
 
+## Spatial model
+
+The shortest accurate description is: one global world, but no single global tile map.
+`LEVEL_MATRIX` places complete 256 × 256 rooms. The separate global snake lattice stores the
+logical head, tail and direction field. Mapping a snake cell $q=(q_x,q_y)$ to
+$\Phi(q)=(6q_x+3,6q_y+3)$ then supplies the world point used by geometric collision.
+
+Walls and the continuous joint chain already live in that world. A collectible is different
+only during placement: `collectibleSpawn()` selects a room-local integer candidate and
+immediately converts it to floating-point world position and velocity. Drawing later projects
+the world through the camera and constructs the B-spline in screen coordinates.
+
+The distinction matters because $256=42\cdot6+4$: room boundaries, the global snake lattice
+and room-local spawn candidates need not align. Door crossing and collection work by geometric
+tests, not by asking whether every object occupies the same cell. The complete derivation is
+in [How Slither Slide represents space](spatial-model.md).
+
 ## Logical movement
 
 `snake_motion.c` owns the tile-grid part of the snake:
@@ -47,15 +64,29 @@ An early return stops the remainder of the frame when a collision, completion or
 - `snakeMotionUpdate()` checks the next head position, moves the head and processes collection;
 - `snakeCollectItem()` updates room progress and grows the body.
 
-The grid makes movement and room transitions discrete. The joint chain is a separate visual layer and never replaces the logical position used by the rules.
+`bodyDirections[y][x]` stores the direction that the tail must follow from an occupied path
+cell. It is not a room tile map: walls and collectibles are never stored in it. A proposed
+integer head cell is mapped to the world-space center
+$\Phi(q_x,q_y)=(6q_x+3,6q_y+3)$ before geometric collision tests. The joint chain is a
+separate continuous layer and never replaces the logical position used by the movement rules.
 
 ## Rooms, walls and doors
 
-The twelve levels occupy a 4 × 3 matrix in `room_layout.c`. `levels.c` stores level requirements and builds the walls and obstacles for the current room.
+The twelve levels occupy a 4 × 3 matrix in `room_layout.c`. Each entry represents a complete
+256 × 256 region of one 1024 × 768 world. `levels.c` stores level requirements and rebuilds the
+active boundary and obstacle rectangles in global coordinates for the current room.
 
-The outer boundary is divided into segments. Opening a door means removing the corresponding segments on the two adjacent sides. `canTraverseLevels()` permits a transition when the levels are adjacent and the room being left is complete.
+The outer boundary is divided into eight segments per side. Opening a door means removing the
+two central segments on the traversable side. `canTraverseLevels()` permits forward movement
+when the levels are adjacent and the room being left is complete; backtracking to the previous
+level remains available.
 
-`collision.c` checks a proposed head position against:
+The head advances in global 6-pixel steps, while a room is 256 pixels wide. Since 256 is not a
+multiple of 6, room edges are geometric boundaries rather than grid lines. After an allowed
+crossing, `handleLevelTransition()` classifies the new world-space head center with integer
+division by the room dimensions and reads the new level from `LEVEL_MATRIX`.
+
+`collision.c` maps a proposed head cell to world coordinates and checks it against:
 
 - world and room boundaries;
 - the wall rectangles currently stored by `walls.c`;
@@ -69,11 +100,17 @@ The geometry path is split into three steps.
 
 ### 1. Joint constraints
 
-`body_chain.c` pins the first joint to the logical head, lets each following joint approach the previous one, separates distant non-neighbouring joints when they overlap and pushes the chain out of walls. The head is pinned again before the final tangent pass, so every stored angle is computed from the corrected positions.
+`body_chain.c` pins the first world-space joint to the center mapped from the logical head, lets
+each following joint approach the previous one, separates distant non-neighbouring joints when
+they overlap and pushes the chain out of walls. The head is pinned again before the final
+tangent pass, so every stored angle is computed from the corrected positions.
 
 ### 2. B-spline samples
 
-`snake_geometry.c` builds the outline controls from left and right offsets around the joints. It then evaluates every periodic cubic span at two parameters. `spline_math.c` contains only the four basis weights.
+`snake_char.c` first projects the joints from world to screen coordinates. `snake_geometry.c`
+then builds the outline controls from left and right offsets around those projected joints and
+evaluates every periodic cubic span at two parameters. `spline_math.c` contains only the four
+basis weights.
 
 The resulting `SnakeGeometry` contains:
 
@@ -96,13 +133,21 @@ The selected span advances automatically until the first A/F or L2/R2 press. Man
 
 ## Collectibles and score
 
-`collectible.c` keeps the current apple or coin, handles its short bounce response and finds a legal spawn position. Spawn candidates must avoid walls, the HUD, corners, the existing body and the extra coin margin. The scan order is fixed because changing it would also change deterministic RIVES entropy consumption.
+`collectible.c` keeps the current apple or coin, handles its short bounce response and finds a
+legal spawn position. It enumerates room-local grid candidates, filters walls, the HUD,
+corners, the existing continuous joint chain and the extra coin margin, then converts the
+selected cell to a floating-point world position. Once pushed, the item moves with velocity
+and friction and is not snapped back to that spawn cell. The scan order is fixed because
+changing it would also change deterministic RIVES entropy consumption.
 
 `scoring.c` records active time by level. A completed room keeps its result, so revisiting it does not restart its timer or create another item. The JSON outcard contains the total score, collected items, body length, total time and compact per-level data.
 
 ## Rendering and audio
 
-`game_render.c` draws the world before the HUD and character. The Technical view is drawn only for the snake skin. Game-over and completion panels are terminal overlays.
+`camera.c` smoothly approaches the current room origin and exposes the translation
+`worldToScreen()`. Collision and physics stay in world coordinates. `game_render.c` draws the
+projected world before the HUD and character. The Technical view is drawn only for the snake
+skin. Game-over and completion panels are terminal overlays.
 
 `audio.c` is the only translation unit that defines `SEQT_IMPL`. It owns the background sequencer and exposes small functions for the sound effects used by the gameplay modules.
 

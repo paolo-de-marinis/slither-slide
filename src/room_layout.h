@@ -10,6 +10,7 @@
 #define WORLD_WIDTH (ROOMS_X * ROOM_WIDTH)
 #define WORLD_HEIGHT (ROOMS_Y * ROOM_HEIGHT)
 
+/* Room-space topology: each entry names one 256 x 256 region of the global world. */
 extern const int LEVEL_MATRIX[ROOMS_Y][ROOMS_X];
 
 bool getRoomPosition(int level, int *roomX, int *roomY);
