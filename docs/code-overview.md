@@ -1,10 +1,35 @@
 # Slither Slide code overview
 
-Slither Slide is written as procedural C with separate modules. The program keeps the frame order visible and passes explicit state to the functions that change it.
+The easiest way to read Slither Slide is not to memorize its modules but to follow the state as it
+changes representation.
 
-## Start here
+At a high level, one active frame contains four different kinds of work:
 
-The entry point in `main.c` is short:
+~~~math
+\text{logical gameplay}
+\longrightarrow
+\text{world-space contact}
+\longrightarrow
+\text{continuous body update}
+\longrightarrow
+\text{rendering}.
+~~~
+
+The code keeps those responsibilities separate even when they operate on the same visible
+object. The logical head is not the joint chain; the joint chain is not the B-spline; the
+B-spline is not the collider.
+
+The mathematical derivations are split by subject:
+
+- [spatial model](spatial-model.md): which coordinates and state spaces exist;
+- [collision model](collision-model.md): which representations interact and how they respond;
+- [procedural body](b-spline.md): how the continuous chain becomes the rendered spline.
+
+This document maps those models back to the procedural C implementation.
+
+## 1. Frame-level control flow
+
+`main.c` keeps the application loop short:
 
 ~~~c
 while (riv_present()) {
@@ -16,149 +41,253 @@ while (riv_present()) {
 }
 ~~~
 
-This order matters. Input is read from the RIVES key state, gameplay advances once, the resulting state is drawn, and the sequenced music is polled last.
+The main gameplay state is the global `GameData game` declared in `game.c` and described in
+`game_state.h`. It contains both discrete and continuous quantities:
 
-The main gameplay state is the global `GameData game` declared in `game.c` and described in `game_state.h`. It contains:
-
-- logical head, tail and direction data on the global snake lattice;
-- the world-space floating-point joint chain used for animation and drawing;
-- movement timers and animation state;
-- per-level items, completion flags, elapsed time and score;
+- logical head, tail and direction state;
+- the global `bodyDirections` successor field;
+- the floating-point joint chain;
+- movement and animation timers;
+- per-level progress and score;
 - the current lifecycle state.
 
-The four lifecycle states are character selection, active play, game over and completion. `gameUpdate()` handles character selection first, ignores terminal states, and then performs the active-play update in this order:
+The four lifecycle states are character selection, active play, game over and completion.
+`gameUpdate()` handles character selection separately, ignores terminal states and then advances
+active play in this order:
 
 1. optional cheat handling;
-2. snake animation;
-3. logical movement and collection;
+2. snake-only tongue animation;
+3. logical movement, collision, room transition and collection;
 4. camera update;
-5. joint-chain constraints;
-6. score and time update;
-7. collectible physics.
+5. continuous joint-chain update;
+6. scoring update;
+7. collectible motion and wall response;
+8. body-to-collectible push.
 
-An early return stops the remainder of the frame when a collision, completion or initialization failure changes the game state.
+An early return stops the rest of the frame whenever movement or progression produces a terminal
+state.
 
-## Spatial model
+This order is part of the model. In particular, head self-collision uses the candidate new head
+against the body chain **before** that frame's chain relaxation.
 
-The shortest accurate description is: one global world, but no single global tile map.
-`LEVEL_MATRIX` places complete 256 × 256 rooms. The separate global snake lattice stores the
-logical head, tail and direction field. Mapping a snake cell $q=(q_x,q_y)$ to
-$\Phi(q)=(6q_x+3,6q_y+3)$ then supplies the world point used by geometric collision.
+## 2. Logical movement and its geometric image
 
-Walls and the continuous joint chain already live in that world. A collectible is different
-only during placement: `collectibleSpawn()` selects a room-local integer candidate and
-immediately converts it to floating-point world position and velocity. Drawing later projects
-the world through the camera and constructs the B-spline in screen coordinates.
+`snake_motion.c` owns the discrete head and tail rules.
 
-The distinction matters because $256=42\cdot6+4$: room boundaries, the global snake lattice
-and room-local spawn candidates need not align. Door crossing and collection work by geometric
-tests, not by asking whether every object occupies the same cell. The complete derivation is
-in [How Slither Slide represents space](spatial-model.md).
+The head proposal is
 
-## Logical movement
+~~~math
+q'=q+d,
+~~~
 
-`snake_motion.c` owns the tile-grid part of the snake:
+where $d$ is one cardinal lattice direction. Before the state is changed,
+`collisionAtNextHead()` maps the proposal to
 
-- `readDirectionInput()` rejects an immediate reversal;
-- `moveTail()` follows `bodyDirections` and clears the old tail cell;
-- `snakeMotionUpdate()` checks the next head position, moves the head and processes collection;
-- `snakeCollectItem()` updates room progress and grows the body.
+~~~math
+H=\Phi(q')=(6q_x'+3,6q_y'+3)
+~~~
 
-`bodyDirections[y][x]` stores the direction that the tail must follow from an occupied path
-cell. It is not a room tile map: walls and collectibles are never stored in it. A proposed
-integer head cell is mapped to the world-space center
-$\Phi(q_x,q_y)=(6q_x+3,6q_y+3)$ before geometric collision tests. The joint chain is a
-separate continuous layer and never replaces the logical position used by the movement rules.
+and evaluates room-edge, wall and self-collision predicates.
 
-## Rooms, walls and doors
+If the proposal is accepted, `snakeMotionUpdate()` then:
 
-The twelve levels occupy a 4 × 3 matrix in `room_layout.c`. Each entry represents a complete
-256 × 256 region of one 1024 × 768 world. `levels.c` stores level requirements and rebuilds the
-active boundary and obstacle rectangles in global coordinates for the current room.
+1. stores the outgoing direction in `bodyDirections` at the previous head cell;
+2. replaces the logical head with $q'$;
+3. asks `handleLevelTransition()` whether the new center belongs to another room;
+4. checks collection against the continuous collectible center;
+5. otherwise advances the tail by reading and clearing its current successor direction.
 
-The outer boundary is divided into eight segments per side. Opening a door means removing the
-two central segments on the traversable side. `canTraverseLevels()` permits forward movement
-when the levels are adjacent and the room being left is complete; backtracking to the previous
-level remains available.
+Thus `bodyDirections` is not a general occupancy grid. It stores only enough information for the
+tail to recover the logical path.
 
-The head advances in global 6-pixel steps, while a room is 256 pixels wide. Since 256 is not a
-multiple of 6, room edges are geometric boundaries rather than grid lines. After an allowed
-crossing, `handleLevelTransition()` classifies the new world-space head center with integer
-division by the room dimensions and reads the new level from `LEVEL_MATRIX`.
+## 3. Rooms, progression and active wall geometry
 
-`collision.c` maps a proposed head cell to world coordinates and checks it against:
+`room_layout.c` contains the 4 x 3 `LEVEL_MATRIX`. Its responsibility is spatial topology:
+level number to room position, inverse lookup and Manhattan adjacency.
 
-- world and room boundaries;
-- the wall rectangles currently stored by `walls.c`;
-- sampled segments of the body chain.
+`levels.c` adds progression. `canTransitionToLevel()` combines the current level with the
+completion rule. `initializeLevel()` then rebuilds the active room state by:
 
-The head radius is the original skin-independent value, `8.0f * 0.67f`. The level-2 square obstacle is tested against the same inset rectangle that is drawn.
+1. obtaining the room origin;
+2. calling `wallsBeginRoom()`;
+3. removing boundary segments for currently traversable doors;
+4. appending level-specific obstacles;
+5. starting scoring for the room;
+6. spawning a collectible only when the room is not already complete.
 
-## From joints to the visible snake
+The current wall set is therefore local in storage but global in coordinates.
 
-The geometry path is split into three steps.
+Door opening is represented twice in compatible ways:
 
-### 1. Joint constraints
+- the head boundary predicate permits crossing only through the geometric opening and only when
+  progression allows it;
+- the corresponding two boundary `Wall` rectangles are removed from the active set.
 
-`body_chain.c` pins the first world-space joint to the center mapped from the logical head, lets
-each following joint approach the previous one, separates distant non-neighbouring joints when
-they overlap and pushes the chain out of walls. The head is pinned again before the final
-tangent pass, so every stored angle is computed from the corrected positions.
+The first is a gameplay decision; the second changes the active world geometry.
 
-### 2. B-spline samples
+## 4. Collision and contact modules
 
-`snake_char.c` first projects the joints from world to screen coordinates. `snake_geometry.c`
-then builds the outline controls from left and right offsets around those projected joints and
-evaluates every periodic cubic span at two parameters. `spline_math.c` contains only the four
-basis weights.
+`collision.c` handles only the head interactions that may reject a proposed logical step. It
+does not own every contact in the game.
 
-The resulting `SnakeGeometry` contains:
+For the head it evaluates:
 
+- room boundary and door geometry;
+- circle--rectangle wall contact;
+- five-point sampling of selected joint-chain segments for self-collision.
+
+`walls.c` owns the reusable rectangle representation and the closest-point circle--rectangle
+primitive. The same primitive is reused outside `collision.c` for body constraints, collectible
+spawn clearance and collectible bounce.
+
+`body_chain.c` then handles a different class of interaction: positional non-penetration. It
+separates distant overlapping joints and pushes joints out of walls. These operations do not end
+the run and do not reflect velocities because the joints have no velocity state.
+
+`collectible.c` contains still another class: continuous object response. It stores
+
+~~~math
+(C,v)
+~~~
+
+for the current item, can assign velocity when the body profile touches it and can reflect that
+velocity when the item hits room bounds or wall rectangles.
+
+The distinction is summarized in the collision-model document as
+
+~~~math
+\text{detection}\neq\text{constraint relaxation}\neq\text{velocity response}.
+~~~
+
+## 5. Continuous body chain
+
+After logical movement has been accepted, `body_chain.c` derives the current continuous
+centerline.
+
+`bodyChainUpdate()` performs one in-place sequential pass:
+
+~~~math
+\text{pin head}
+\to
+\text{follow previous joint}
+\to
+\text{joint separation}
+\to
+\text{wall correction}
+\to
+\text{pin head again}
+\to
+\text{recompute tangents}.
+~~~
+
+The repeated head pin enforces
+
+~~~math
+J_0=\Phi(q)
+~~~
+
+as a boundary condition. Other joints may move to arbitrary floating-point coordinates, but the
+constraint pass does not rewrite the logical head cell.
+
+`snakeBodyWidth()` is shared by the body constraints, profile construction and some contact
+rules. This gives those subsystems a common local width law without making them use the same
+collision surface.
+
+## 6. From joint chain to periodic B-spline
+
+Rendering is split into projection, geometric construction and rasterization.
+
+`snake_char.c` first maps every world-space joint through the camera translation and stores the
+projected chain in `drawJoints`.
+
+`snake_geometry.c` then constructs the left and right profile offsets and the front control. For
+$m$ joints the ideal ordering is
+
+~~~math
+L_{m-1},\ldots,L_0,F,R_0,\ldots,R_{m-1}.
+~~~
+
+The stored controls are integer-converted screen coordinates. `snakeGeometryEvaluateSpan()`
+evaluates one cubic span using four consecutive controls with periodic indexing. Because the
+window advances by one control, these are local spans of one global periodic B-spline, not
+independent four-control curves.
+
+With `SNAKE_SAMPLES_PER_SPAN = 2`, every span stores the values at
+
+~~~math
+t=0,\qquad t=\frac12.
+~~~
+
+`snake_char.c` pairs the resulting samples across the ordered outline and fills the body with
+triangles. Head, tongue and scale marks are drawn separately.
+
+The caterpillar uses the same continuous joint chain but bypasses this B-spline renderer and has
+its own simpler drawing path.
+
+## 7. Collectible lifecycle
+
+The collectible illustrates a representation change in code.
+
+`collectibleSpawn()` first enumerates room-local integer candidates. It filters them against
+placement rules, maps the selected candidate into global world coordinates and then discards the
+cell identity.
+
+The persistent runtime state contains floating-point position and velocity. A stationary item can
+be pushed by two side-profile points derived from the joints. A moving item is advanced, damped,
+confined to the room and reflected against active walls.
+
+The implementation uses interaction-specific sizes: coins receive larger spawn clearance and
+rendering, while the current runtime collection and bounce rules use the 7-pixel collectible
+radius for both item types. The collision-model document records this as an implementation
+asymmetry rather than inventing one universal item radius.
+
+## 8. Camera and Technical view
+
+`camera.c` exposes the translation
+
+~~~math
+\Pi_K(p)=p-K.
+~~~
+
+Gameplay collision and body constraints remain in world coordinates. Camera projection is applied
+only for drawing.
+
+`developer_controls.c` keeps Technical-view state outside `GameData`. `technical_view.c` then
+receives const pointers to the projected `SnakeGeometry` and live joint data. It visualizes:
+
+- the center chain;
 - the complete closed control polygon;
-- the two samples per span consumed by the renderer.
+- the selected four-control span window;
+- stored renderer samples;
+- an explanatory continuously evaluated point $C_i(t)$.
 
-### 3. Drawing
+The overlay therefore observes the same geometry used by the renderer without becoming part of
+the gameplay state machine.
 
-`snake_char.c` pairs samples from the two sides and fills each strip with two triangles. The head, tongue and scale marks are added afterwards. The geometry buffers are static because they are reused every frame and are too large to allocate repeatedly on the stack.
+## 9. Scoring, audio and terminal states
 
-The caterpillar follows the same joint chain but has its own simpler renderer in `caterpillar_char.c`.
+`scoring.c` records per-level active time and completed-room scores. Re-entering a completed room
+does not restart its timer or create another collectible.
 
-## Technical view
+`audio.c` is the only translation unit that defines `SEQT_IMPL`. Gameplay modules request named
+sound effects or start/stop background music; they do not own the sequencer.
 
-`developer_controls.c` stores only the toggle and active-span selection. This state is deliberately separate from `GameData` because it belongs to the explanatory interface rather than to the run.
+`gameEnd()` and `gameComplete()` turn gameplay outcomes into terminal lifecycle states and set the
+future quit frame. Once the state is terminal, `gameUpdate()` no longer advances gameplay.
 
-`technical_view.c` receives const pointers to the live joints and `SnakeGeometry`. It draws the chain, all controls, the selected four-control window, renderer samples and the moving point $C_i(t)$. It cannot change movement, collision, score, timers, RNG or outcard data.
-
-The selected span advances automatically until the first A/F or L2/R2 press. Manual navigation then moves the window by one control point and wraps around the current polygon.
-
-## Collectibles and score
-
-`collectible.c` keeps the current apple or coin, handles its short bounce response and finds a
-legal spawn position. It enumerates room-local grid candidates, filters walls, the HUD,
-corners, the existing continuous joint chain and the extra coin margin, then converts the
-selected cell to a floating-point world position. Once pushed, the item moves with velocity
-and friction and is not snapped back to that spawn cell. The scan order is fixed because
-changing it would also change deterministic RIVES entropy consumption.
-
-`scoring.c` records active time by level. A completed room keeps its result, so revisiting it does not restart its timer or create another item. The JSON outcard contains the total score, collected items, body length, total time and compact per-level data.
-
-## Rendering and audio
-
-`camera.c` smoothly approaches the current room origin and exposes the translation
-`worldToScreen()`. Collision and physics stay in world coordinates. `game_render.c` draws the
-projected world before the HUD and character. The Technical view is drawn only for the snake
-skin. Game-over and completion panels are terminal overlays.
-
-`audio.c` is the only translation unit that defines `SEQT_IMPL`. It owns the background sequencer and exposes small functions for the sound effects used by the gameplay modules.
-
-## Build flags
+## 10. Build flags and tests
 
 `DEBUG_MODE` and `CHEATS_ENABLED` are independent and default to zero:
 
 - debug mode adds diagnostics;
-- cheats enable R/R3 level advancement through the ordinary completion path;
-- the Technical view is available in the normal build and does not depend on either flag.
+- cheats enable the R/R3 level-completion helper;
+- the Technical view is part of the normal build and depends on neither flag.
 
-## Tests
+The host suite in `tests/` checks selected invariants across room topology, doors, scoring, body
+anchoring, B-spline basis and periodic geometry, Technical-view controls, gameplay completion and
+head collision clearance.
 
-The host checks in `tests/` cover the room matrix and doors, scoring, body-chain invariants, B-spline basis and periodic geometry, Technical-view controls, completion events, spawn failure and collision clearance. They use the same production functions where possible and small RIVES stubs where the platform context is required.
+The suite should not be read as a proof that every continuous configuration is safe. In
+particular, several response rules in the collision model are derived directly from production
+code but do not yet have dedicated isolated tests. [Validation](validation.md) records the exact
+boundary between automated checks, runtime checks and untested behavior.

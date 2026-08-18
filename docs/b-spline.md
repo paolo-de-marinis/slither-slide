@@ -1,128 +1,246 @@
 # Mathematics of the procedural body
 
-Slither Slide uses two descriptions of the snake at the same time:
+The visible snake is not the logical snake drawn with rounded corners. Slither Slide first keeps
+a discrete state for gameplay, derives a continuous centerline from that state, turns the
+centerline into a closed profile and only then approximates that profile with a periodic cubic
+B-spline.
 
-- a global tile-lattice state for movement, doors and game rules;
-- a world-space floating-point joint chain for the animated body.
-
-The B-spline belongs to the second description. At runtime the joint chain is projected to
-screen coordinates before the spline is built. It changes the appearance of the body without
-changing the logical path of the head. The surrounding room, wall, camera and collectible
-representations are derived in [How Slither Slide represents space](spatial-model.md).
-
-## 1. Joint chain
-
-Let
+The construction is therefore best read as a sequence of maps:
 
 ~~~math
-J_i=(x_i,y_i),\qquad i=0,\ldots,m-1,
+q
+\longrightarrow
+J
+\longrightarrow
+(L,R,F)
+\longrightarrow
+P
+\longrightarrow
+C
+\longrightarrow
+\text{raster triangles}.
 ~~~
 
-be the ordered world-space joint centers, with $J_0$ at the head. If the logical head occupies
-global snake cell $(q_x,q_y)$ and the tile size is $T$, `bodyChainUpdate()` imposes
+Each arrow answers a different question. The logical head $q$ determines where gameplay says
+the snake is. The joint chain $J$ determines a deformable centerline. The offsets $L_i,R_i$
+give that centerline width. The ordered controls $P_j$ define one closed B-spline. Sampling the
+curve finally gives the finite geometry consumed by the renderer.
+
+The surrounding world and the distinction between discrete and continuous coordinates are
+derived in [How Slither Slide represents space](spatial-model.md). Collision uses the same
+joint chain but a different geometric approximation, derived in
+[How Slither Slide separates collision, constraints and response](collision-model.md).
+
+## 1. From logical head to continuous centerline
+
+Let the ordered world-space joint centers be
 
 ~~~math
-J_0=\left(Tq_x+\frac{T}{2},\ Tq_y+\frac{T}{2}\right).
+J=(J_0,\ldots,J_{m-1}),
+\qquad
+J_i=(x_i,y_i)\in\mathbb R^2,
 ~~~
 
-The head is pinned both before and after the constraint pass. It is therefore a boundary condition, not a free point that can drift while the other joints are corrected.
+with $J_0$ at the head. If the logical head occupies the global snake cell
+
+~~~math
+q=(q_x,q_y)
+~~~
+
+and the tile size is $T=6$, the first joint is not free:
+
+~~~math
+J_0=\Phi(q)=\left(Tq_x+\frac T2,\ Tq_y+\frac T2\right).
+~~~
+
+`bodyChainUpdate()` pins this point before and after the constraint pass. The discrete head is
+therefore a boundary condition for the continuous chain.
 
 For a following joint, define
 
 ~~~math
-\Delta_i=J_{i-1}-J_i,\qquad d_i=\|\Delta_i\|.
+\Delta_i=J_{i-1}-J_i,
+\qquad
+d_i=\lVert\Delta_i\rVert.
 ~~~
 
-When $d_i>T$, the update is
+The local following operator depends on whether the link is extended beyond $T$. If
 
 ~~~math
-J_i'=J_i+\frac{d_i-T}{d_i}\Delta_i,
+d_i>T,
 ~~~
 
-which returns the link to length $T$. Otherwise the code uses a softer correction toward $0.9T$:
+the update is
 
 ~~~math
-J_i'=J_i+\frac12\frac{d_i-0.9T}{d_i}\Delta_i.
+J_i'
+=J_i+\frac{d_i-T}{d_i}\Delta_i,
 ~~~
 
-The normalization is skipped for $d_i\leq10^{-4}$. This avoids dividing by a negligible distance.
+which moves $J_i$ exactly far enough along the current link direction to return the distance to
+$T$.
 
-The chain then receives two local corrections:
-
-- non-neighbouring joints are separated when their bodies overlap;
-- joints inside the clearance of a wall rectangle are pushed outward.
-
-These are position corrections chosen for the scale of the cartridge. They are not an elastic-body simulation. After the corrections, every tangent angle is recomputed from the final joint positions:
+When
 
 ~~~math
-\theta_i=\mathrm{atan2}(y_{i-1}-y_i,\ x_{i-1}-x_i).
+10^{-4}<d_i\leq T,
 ~~~
 
-For the head, the same formula uses $J_0-J_1$.
-
-## 2. From centerline to outline
-
-For local angle $\theta_i$, define the tangent and normal
+the code instead uses
 
 ~~~math
-\mathbf t_i=(\cos\theta_i,\sin\theta_i),\qquad
+J_i'
+=J_i+\frac12\frac{d_i-0.9T}{d_i}\Delta_i.
+~~~
+
+This is a softer correction toward $0.9T$. For $d_i\leq10^{-4}$ the normalization is skipped.
+
+The following rule is only one part of the chain update. Non-neighbouring joints may then be
+separated and joints may be pushed away from walls. Those are positional constraints, not
+velocity-based dynamics; their exact predicates and responses are derived in the collision
+model.
+
+After all positional corrections, tangent angles are reconstructed from the final chain. For
+$i\geq1$,
+
+~~~math
+\theta_i
+=\mathrm{atan2}
+(y_{i-1}-y_i,\ x_{i-1}-x_i),
+~~~
+
+while the head uses the direction of $J_0-J_1$.
+
+The important dependency is therefore
+
+~~~math
+\text{positions first}\longrightarrow\text{tangents afterwards}.
+~~~
+
+The tangent is a derived geometric quantity, not an independent degree of freedom.
+
+## 2. From centerline to a body profile
+
+A centerline has no thickness. To obtain a visible body, define at each joint the unit tangent
+and its perpendicular normal:
+
+~~~math
+\mathbf t_i=(\cos\theta_i,\sin\theta_i),
+\qquad
 \mathbf n_i=(-\sin\theta_i,\cos\theta_i).
 ~~~
 
-If $w_i$ is the local half-width, the two sides of the body are
+Let $w_i$ be the local half-width returned by `snakeBodyWidth()`. The two profile points are
 
 ~~~math
-L_i=J_i+w_i\mathbf n_i,\qquad
+L_i=J_i+w_i\mathbf n_i,
+\qquad
 R_i=J_i-w_i\mathbf n_i.
 ~~~
 
-`snakeBodyWidth()` uses 8 pixels at the head, 7 at the next joint and then a gradual taper from 6 pixels to a minimum of 4.
-
-For the mathematical construction, `snakeGeometryBuild()` turns these offset points into one
-ordered control sequence. In the runtime drawing path, `snake_char.c` first translates the
-world joints to screen coordinates and supplies those projected joints to this construction.
-Let
+The width law is discrete in the joint index:
 
 ~~~math
-F=J_0+w_0\mathbf t_0
+w_i=
+\begin{cases}
+8, & i=0,\\
+7, & i=1,\\
+\max\left(6-\dfrac{i}{24},4\right), & i\geq2.
+\end{cases}
 ~~~
 
-be the additional point in front of the head. With $m$ joints, the geometric controls $P_0,\ldots,P_{2m}$ are ordered as
+The body therefore narrows gradually toward the tail after the first two joints.
+
+One additional point extends the profile in front of the head:
 
 ~~~math
-(P_0,\ldots,P_{2m})=
-\bigl(L_{m-1},\ldots,L_0,F,R_0,\ldots,R_{m-1}\bigr).
+F=J_0+w_0\mathbf t_0.
 ~~~
 
-Thus the outline is traversed in the order
+The sets $\{L_i\}$ and $\{R_i\}$ are not yet a closed curve. They must first be ordered around
+the boundary.
+
+## 3. The control polygon is one ordered closed outline
+
+With $m$ joints, `snakeGeometryBuild()` creates $2m+1$ controls. Ignoring raster conversion for
+the moment, their geometric order is
 
 ~~~math
-L_{m-1},\ldots,L_0,\ F,\ R_0,\ldots,R_{m-1},
+(P_0,\ldots,P_{2m})
+=
+\bigl(
+L_{m-1},\ldots,L_0,
+F,
+R_0,\ldots,R_{m-1}
+\bigr).
 ~~~
 
-from the tail to the head along the left side and back to the tail along the right side. Periodic indexing then connects the final right-tail control to the initial left-tail control.
-
-The $P_j$ are therefore not a third geometric construction. They are the offset points $L_i$ and $R_i$, plus the front control $F$, arranged in outline order. The joint index $i$ follows the centerline from head to tail, whereas the control index $j$ follows the closed outline.
-
-Implementation note: `appendControlPoint()` currently converts each screen-space control
-coordinate to an integer before spline evaluation. The B-spline samples are still computed in
-floating point, and `snake_char.c` converts those samples to integers when calling the RIVES
-drawing functions. This pixel-grid conversion is an implementation detail, not part of the
-mathematical definition or of the control ordering above. Because the camera projection is a
-translation, it preserves the ideal spline shape; truncation is the only raster-specific step
-introduced before evaluation.
-
-## 3. Cubic uniform B-spline
-
-A B-spline of degree $p$ is globally defined by all its control points:
+The control index therefore follows the boundary rather than the centerline:
 
 ~~~math
-C(u)=\sum_{j=0}^{n-1}N_{j,p}(u)P_j.
+\text{tail left}
+\longrightarrow
+\text{head left}
+\longrightarrow
+F
+\longrightarrow
+\text{head right}
+\longrightarrow
+\text{tail right}.
 ~~~
 
-Its basis functions have local support: in the interior of any knot span, only $p+1$ consecutive basis functions are non-zero. Here $p=3$, so evaluating one span requires four neighbouring controls. The next span shifts this window by one control, and periodic indexing makes the final windows wrap around the closed polygon. Evaluating four controls at a time is therefore the local evaluation of the full spline, not a partition into independent groups of four.
+This distinction between indices matters. $J_i$ refers to a point on the centerline, while
+$P_j$ refers to a point in the ordered outline. The controls are not a third independent body
+model; they are the two offset profiles plus $F$ written in boundary order.
 
-For Slither Slide's cubic uniform basis, let $t\in[0,1)$ be the local parameter of a span:
+Periodic indexing closes the polygon algebraically. There is no separate terminal spline case:
+a control index outside $0,\ldots,2m$ is read modulo the total control count.
+
+### Runtime coordinate conversion
+
+The mathematical construction above can be described in world coordinates because translation
+preserves its shape. The runtime drawing path performs one extra step first:
+
+~~~math
+J_i^{\mathrm{screen}}=J_i-K,
+~~~
+
+where $K$ is the camera translation. `snake_char.c` supplies these projected joints to
+`snakeGeometryBuild()`.
+
+`appendControlPoint()` then converts every control coordinate toward zero to an integer before
+spline evaluation. If $\tau$ denotes componentwise C integer conversion, the actual stored
+control sequence is
+
+~~~math
+(\widehat P_0,\ldots,\widehat P_{2m})
+=
+\bigl(
+\tau(L_{m-1}),\ldots,\tau(L_0),
+\tau(F),
+\tau(R_0),\ldots,\tau(R_{m-1})
+\bigr)
+~~~
+
+in screen coordinates.
+
+The truncation is an implementation-level rasterization effect. It is not part of the ideal
+profile definition. The B-spline samples themselves are again accumulated in floating point.
+
+## 4. One cubic B-spline, evaluated locally
+
+A degree-$p$ B-spline is globally determined by an ordered control sequence:
+
+~~~math
+C(u)=\sum_j N_{j,p}(u)P_j.
+~~~
+
+The defining property relevant here is local support. For degree $p=3$, only four consecutive
+basis functions are non-zero inside one span. Therefore evaluating four controls at a time does
+**not** create independent four-point splines. It evaluates local spans of one global periodic
+curve.
+
+For the uniform cubic basis used by the cartridge, let $t\in[0,1)$ be the local span parameter:
 
 ~~~math
 \begin{aligned}
@@ -133,120 +251,209 @@ b_3(t)&=\frac{t^3}{6}.
 \end{aligned}
 ~~~
 
-In the spline formulas, $P_j$ always denotes an element of this ordered outline sequence, not a center-chain joint $J_i$. The span beginning at control $P_i$ is
+For a span beginning at control $P_i$,
 
 ~~~math
-C_i(t)=\sum_{k=0}^{3}b_k(t)P_{i+k}.
+C_i(t)
+=\sum_{k=0}^{3}b_k(t)P_{i+k},
 ~~~
 
-The same weighted sum is evaluated for the $x$ and $y$ coordinates. The four weights are non-negative and satisfy
+where control indices are interpreted periodically.
+
+The weights satisfy
 
 ~~~math
+b_k(t)\geq0,
+\qquad
 \sum_{k=0}^{3}b_k(t)=1.
 ~~~
 
-Every sample is therefore a convex combination of four nearby controls. This gives the construction three useful properties:
+Each point $C_i(t)$ is therefore a convex combination of four nearby controls. This immediately
+explains why moving one control changes only neighbouring spans and why the curve approximates,
+rather than interpolates, the control polygon.
 
-- local support: changing one control affects only neighbouring spans;
-- affine invariance: translating, rotating or uniformly scaling the polygon produces the same transformation of the curve;
-- $C^2$ continuity between ordinary uniform cubic spans.
+## 5. Continuity comes from the basis, not from stitching curves
 
-The curve approximates the polygon; it is not forced through every control point.
+Because consecutive spans use shifted windows of the same uniform basis, they agree through
+second derivative at their common boundary.
 
-### Midpoint sample
-
-The renderer uses $t=0$ and $t=\tfrac12$ on every span. At the midpoint,
+At $t=1$ for span $i$ and $t=0$ for span $i+1$,
 
 ~~~math
-b_0\!\left(\frac12\right)=b_3\!\left(\frac12\right)=\frac1{48},
+C_i'(1)
+=\frac{-P_{i+1}+P_{i+3}}2
+=C_{i+1}'(0),
+~~~
+
+and
+
+~~~math
+C_i''(1)
+=P_{i+1}-2P_{i+2}+P_{i+3}
+=C_{i+1}''(0).
+~~~
+
+Thus the ordinary uniform spans join with $C^2$ continuity. Periodic indexing applies the same
+local rule at the closure, so the final spans reuse the first controls instead of switching to a
+special endpoint construction.
+
+The smoothness is therefore a property of one periodic spline evaluated span by span, not the
+result of manually joining separate cubic curves.
+
+## 6. Runtime sampling is a second approximation
+
+The mathematical curve contains infinitely many parameter values. The renderer cannot draw that
+object directly, so the implementation samples every span at
+
+~~~math
+t=0,
 \qquad
-b_1\!\left(\frac12\right)=b_2\!\left(\frac12\right)=\frac{23}{48}.
+t=\frac12.
+~~~
+
+Since `SNAKE_SAMPLES_PER_SPAN = 2`, a geometry with $n$ controls produces
+
+~~~math
+2n
+~~~
+
+stored curve samples. The endpoint $t=1$ is not sampled separately; geometrically it coincides
+with the next span's $t=0$ boundary value.
+
+The midpoint weights are
+
+~~~math
+b_0\!\left(\frac12\right)
+=b_3\!\left(\frac12\right)
+=\frac1{48},
+~~~
+
+and
+
+~~~math
+b_1\!\left(\frac12\right)
+=b_2\!\left(\frac12\right)
+=\frac{23}{48}.
 ~~~
 
 Hence
 
 ~~~math
 C_i\!\left(\frac12\right)
-=\frac{P_i+23P_{i+1}+23P_{i+2}+P_{i+3}}{48}.
+=
+\frac{P_i+23P_{i+1}+23P_{i+2}+P_{i+3}}{48}.
 ~~~
 
-The two middle controls dominate the sample, while the outer pair provides a smaller symmetric correction.
+The renderer then uses the finite sample sequence rather than the analytic spline. Samples from
+opposite sides of the ordered outline are paired and filled with triangles, and the outline is
+drawn as line segments between successive samples.
 
-At a span boundary,
+There are therefore two distinct approximations downstream from the continuous centerline:
 
 ~~~math
-\begin{aligned}
-C_i'(1)&=\frac{-P_{i+1}+P_{i+3}}2=C_{i+1}'(0),\\
-C_i''(1)&=P_{i+1}-2P_{i+2}+P_{i+3}=C_{i+1}''(0).
-\end{aligned}
+\text{ideal offset controls}
+\xrightarrow{\tau}
+\text{integer-valued stored controls}
+\xrightarrow{t\in\{0,1/2\}}
+\text{finite curve samples}
+\xrightarrow{\text{triangles}}
+\text{raster body}.
 ~~~
 
-This is the direct $C^2$ continuity check for the basis used in the code.
+Neither approximation changes the logical head path.
 
-## 4. Closure and rasterization
+## 7. Rendering geometry and collision geometry deliberately diverge
 
-The control indices are taken modulo the number of controls. The final spans reuse the first controls and close the curve without a separate endpoint case.
+The B-spline is the richest representation of the visible body, but collision does not use the
+filled triangles as an authoritative surface.
 
-Each span is sampled at
+The head is tested against room and wall geometry as a circle. Self-collision instead thickens
+selected centerline segments and approximates them with five sample points per segment. Joint
+constraints operate directly on $J_i$. The collectible uses still other local contact models.
+
+Thus
 
 ~~~math
-t=0,\quad t=0.5.
+\boxed{
+\text{rendered surface}
+\neq
+\text{gameplay collider}.
+}
 ~~~
 
-$t=1$ is omitted because it is the $t=0$ sample of the next span. Two samples per span were chosen as a compromise between a smooth outline and the number of RIVES drawing operations.
+This separation prevents a purely visual parameter such as `SNAKE_SAMPLES_PER_SPAN` from
+silently becoming a gameplay parameter. Increasing B-spline sampling density can improve the
+picture without changing self-collision, while changing the self-collision samples can change
+gameplay without altering the analytic spline.
 
-`snake_char.c` pairs samples from the two sides of the body and fills the strip with triangles. The visible outline is therefore a polygonal raster approximation of the mathematical B-spline.
+The exact collision predicates are derived in [the collision model](collision-model.md).
 
-Collision remains in world coordinates and uses a cheaper description:
-
-- a circle for the head against room boundaries and walls;
-- five points on each relevant centerline segment for self-collision.
-
-The collision surface and the rendered surface are close but are not identical.
-
-## 5. Runtime Technical view
+## 8. Runtime Technical view
 
 ![Runtime Technical view over the live snake geometry](media/slither-slide-technical-view.png)
 
-The Technical view displays the complete construction used in the current frame. It projects
-the world-space joints with the live camera and reads the already projected `SnakeGeometry`
-used by the renderer:
+The Technical view exposes the same construction used by the renderer:
 
 ~~~math
-\text{joints}\longrightarrow\text{offset controls}
-\longrightarrow\text{B-spline samples}\longrightarrow\text{triangles}.
+\text{projected joints}
+\longrightarrow
+\text{offset controls}
+\longrightarrow
+\text{periodic B-spline samples}
+\longrightarrow
+\text{triangles}.
 ~~~
 
-- pink points: center-chain joints;
-- light-blue points and blue lines: complete closed control polygon;
-- four orange rings: controls of the selected span;
-- yellow points: samples used by the renderer;
-- white point: $C_i(t)$ moving through the selected span.
+The overlay uses the following visual roles:
+
+- pink points: projected center-chain joints;
+- light-blue points and blue lines: the complete closed control polygon;
+- four orange rings: the local control window for the selected span;
+- yellow points: the samples stored for rendering;
+- white point: the explanatory value $C_i(t)$ moving through that span.
 
 ![Selected B-spline span and basis weights](media/slither-slide-technical-view-detail.png)
 
-The four orange controls form a sliding window, not the full control set. A/F or L2/R2 moves that window by one control point with wrap-around. Before manual input, the selected span advances automatically.
+The four orange controls are therefore a local window into the complete polygon, not the full
+control set. A/F or L2/R2 changes the selected span by one control with periodic wrap-around.
+Before manual selection, the displayed span advances automatically.
 
-The panel reports $t$ and the four current basis weights. The animated white point is explanatory; it is not an extra sample used for the body fill.
+The white point is not an additional renderer sample. It is evaluated for explanation while the
+actual body continues to use the stored two-samples-per-span geometry.
 
-The view reads the same `SnakeGeometry` object as the renderer. Its API receives const geometry and joint data, so it cannot modify movement, timers, score, RNG, collision or outcard state.
+The view receives const geometry and joint data, so it reads the live construction without
+changing movement, score, timers, RNG, collision or outcard state.
 
-## 6. Design choices
+## 9. What is mathematical structure and what is an implementation parameter
 
-| Choice | Effect | Reason |
-| --- | --- | --- |
-| global grid head and world-space floating-point joints | separates rules from appearance | predictable input with curved motion |
-| hard extension and soft compression | limits link length without a rigid chain | stable following |
-| normal offsets $J_i\pm w_i\mathbf n_i$ | turns a centerline into a profile | body follows local orientation |
-| tapered $w_i$ | narrows the profile toward the tail | readable character shape |
-| cubic uniform B-spline | local $C^2$ approximation | small fixed basis |
-| periodic indices | closes the outline | no endpoint branch |
-| two samples per span | polygonal approximation | bounded drawing cost |
-| simpler collision primitives | approximate collision | rules do not depend on rendering density |
+The construction contains both structural choices and numerical parameters. They should not be
+presented with the same status.
 
-## 7. Development and sources
+The following relations define the current geometric architecture:
 
-Paolo De Marinis selected the B-spline family and configured its use in the cartridge: outline construction, degree and basis, periodic closure and sampling. The implementation was produced with Cursor assistance, integrated into the game and validated by him.
+~~~math
+J_0=\Phi(q),
+\qquad
+L_i=J_i+w_i\mathbf n_i,
+\qquad
+R_i=J_i-w_i\mathbf n_i,
+~~~
+
+followed by one periodically indexed cubic uniform B-spline over the ordered outline.
+
+Other values belong to the implementation rather than to a general spline theory: the taper law
+for $w_i$, integer conversion of controls, two samples per span, fixed buffer capacities and the
+specific positional-constraint coefficients used to update $J$.
+
+This distinction matters when interpreting the code. The B-spline basis gives mathematical
+properties such as local support and $C^2$ span continuity. Values such as two renderer samples
+per span are finite engineering choices and are not consequences of those properties.
+
+## 10. Development, sources and limits
+
+Paolo De Marinis selected the B-spline family and configured its use in the cartridge: the
+outline construction, degree and basis, periodic closure and runtime sampling. The implementation
+was produced with Cursor assistance, integrated into the game and validated by him.
 
 Mathematical background:
 
@@ -254,7 +461,8 @@ Mathematical background:
 - [Interpolazione polinomiale a tratti](https://people.dm.unipi.it/bini/Didattica/IAN/appunti/splinenuovo.pdf)
 - [Traccia della terza parte del corso di IAN](https://people.dm.unipi.it/bini/Didattica/IAN/appunti/terzaparte.pdf)
 
-Bini's notes cover broader interpolating-spline theory. Slither Slide directly evaluates a closed parametric uniform B-spline and does not solve a global interpolation system.
+Bini's notes cover broader interpolating-spline theory. Slither Slide directly evaluates a
+closed parametric uniform B-spline; it does not solve a global interpolation system.
 
 Procedural-animation study source used during development:
 
@@ -264,14 +472,19 @@ Retrospective comparison:
 
 - [animal-proc-anim](https://github.com/argonautcode/animal-proc-anim), © 2024 argonaut, MIT License.
 
-The comparison project shares the general idea of a linked center chain, angle-based side offsets and a tapered outline. It was not the source used during the original cartridge development, and no code-lineage claim is made from that similarity. Slither Slide adds its own grid-driven head, constraint rules, periodic cubic B-spline, RIVES rendering and collision model.
+That project shares the broad idea of a linked center chain, angle-based side offsets and a
+tapered outline. It was not the source used during the original cartridge development, and no
+code-lineage claim is made from the similarity.
 
-## 8. Limits and checks
+The current implementation also has explicit limits:
 
-- Buffers have fixed capacity derived from `MAX_JOINTS`.
-- Controls are converted to integer coordinates before sampling.
-- The renderer uses only two samples per span.
-- Triangle pairing assumes matching order on the two sides.
-- Collision does not test the filled triangles.
+- buffers have fixed capacity derived from `MAX_JOINTS`;
+- stored controls are converted to integer coordinates before spline evaluation;
+- every span contributes only two renderer samples;
+- triangle filling assumes the current periodic sample ordering;
+- collision does not test the filled spline surface.
 
-The host suite checks basis values and partition of unity, exact midpoint weights, control and sample counts, periodic closure, agreement between stored samples and direct evaluation, the final head anchor and tangent reconstruction. These checks cover the implementation invariants used by the cartridge; they are not a general stability proof for every possible joint configuration.
+The host suite checks basis values and partition of unity, midpoint weights, control and sample
+counts, periodic closure, agreement between stored samples and direct span evaluation, the final
+head anchor and tangent reconstruction. These checks establish implementation invariants used by
+the cartridge; they are not a general stability proof for every possible joint configuration.
