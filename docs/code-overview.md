@@ -104,10 +104,10 @@ cartridge's chosen spatial scale. The room-related constants satisfy
 =\texttt{ROOM\_WIDTH}.
 ~~~
 
-Thus the 42-unit logical room scale corresponds to 252 world-space pixels, and the remaining
-4-pixel difference is exactly the wall-thickness scale used by the room geometry. This numerical
-relation explains the role of `TILE_SIZE = 6` in the implementation; it should not be read as a
-universal geometric constant.
+Thus 42 logical increments at this scale cover 252 world-space pixels, while the remaining
+4-pixel difference has the same numerical scale as `WALL_THICKNESS`. This relation explains why
+`TILE_SIZE = 6` is a natural conversion factor for the cartridge's 256-pixel room geometry; it
+should not be read as a universal geometric constant.
 
 The map from a logical cell to the center of its world-space image is therefore
 
@@ -116,14 +116,14 @@ The map from a logical cell to the center of its world-space image is therefore
 =\left(Tq_x+\frac T2,\ Tq_y+\frac T2\right).
 ~~~
 
-For the current value \(T=6\), this becomes
+For the current value $T=6$, this becomes
 
 ~~~math
 \Phi(q_x,q_y)=(6q_x+3,6q_y+3).
 ~~~
 
-The offset 3 is simply \(T/2\): it places the world-space point at the center of the corresponding
-6 x 6 logical step. Consequently the discrete proposal \(q\to q+d\) becomes a six-pixel
+The offset 3 is simply $T/2$: it places the world-space point at the center of the corresponding
+6 x 6 logical step. Consequently the discrete proposal $q\to q+d$ becomes a six-pixel
 translation of the candidate head center.
 
 The same scale is retained across the complete global world. Since
