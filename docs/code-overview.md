@@ -72,24 +72,78 @@ against the body chain **before** that frame's chain relaxation.
 
 ## 2. Logical movement and its geometric image
 
-`snake_motion.c` owns the discrete head and tail rules.
+`snake_motion.c` owns the discrete head and tail rules. The logical head is an integer lattice
+point
 
-The head proposal is
+~~~math
+q=(q_x,q_y)\in\mathbb Z^2,
+~~~
+
+and one movement tick proposes
 
 ~~~math
 q'=q+d,
+\qquad
+d\in\{(-1,0),(1,0),(0,-1),(0,1)\}.
 ~~~
 
-where $d$ is one cardinal lattice direction. Before the state is changed,
-`collisionAtNextHead()` maps the proposal to
+The unit in this equation is a **logical step**, not one world-space pixel. The conversion scale
+is the implementation constant
 
 ~~~math
-H=\Phi(q')=(6q_x'+3,6q_y'+3)
+T=\texttt{TILE\_SIZE}=6.
 ~~~
 
-and evaluates room-edge, wall and self-collision predicates.
+The value 6 is not a consequence of the B-spline or of a collision formula. It belongs to the
+cartridge's chosen spatial scale. The room-related constants satisfy
 
-If the proposal is accepted, `snakeMotionUpdate()` then:
+~~~math
+\texttt{MAP\_SIZE}\,T+\texttt{WALL\_THICKNESS}
+=42\cdot6+4
+=256
+=\texttt{ROOM\_WIDTH}.
+~~~
+
+Thus the 42-unit logical room scale corresponds to 252 world-space pixels, and the remaining
+4-pixel difference is exactly the wall-thickness scale used by the room geometry. This numerical
+relation explains the role of `TILE_SIZE = 6` in the implementation; it should not be read as a
+universal geometric constant.
+
+The map from a logical cell to the center of its world-space image is therefore
+
+~~~math
+\Phi_T(q_x,q_y)
+=\left(Tq_x+\frac T2,\ Tq_y+\frac T2\right).
+~~~
+
+For the current value \(T=6\), this becomes
+
+~~~math
+\Phi(q_x,q_y)=(6q_x+3,6q_y+3).
+~~~
+
+The offset 3 is simply \(T/2\): it places the world-space point at the center of the corresponding
+6 x 6 logical step. Consequently the discrete proposal \(q\to q+d\) becomes a six-pixel
+translation of the candidate head center.
+
+The same scale is retained across the complete global world. Since
+
+~~~math
+256=42\cdot6+4
+~~~
+
+is not divisible by 6, room edges do not generally coincide with lines of the global snake
+lattice. Crossing a room boundary is therefore handled geometrically rather than by restarting
+or resizing the lattice in each room.
+
+Before the logical state is changed, `collisionAtNextHead()` maps the proposal to
+
+~~~math
+H=\Phi(q')
+~~~
+
+and evaluates room-edge, wall and self-collision predicates on that world-space point. Only if
+those tests accept the proposal does `snakeMotionUpdate()` commit the new logical state. It then:
 
 1. stores the outgoing direction in `bodyDirections` at the previous head cell;
 2. replaces the logical head with $q'$;
@@ -98,7 +152,11 @@ If the proposal is accepted, `snakeMotionUpdate()` then:
 5. otherwise advances the tail by reading and clearing its current successor direction.
 
 Thus `bodyDirections` is not a general occupancy grid. It stores only enough information for the
-tail to recover the logical path.
+tail to recover the logical path. The important separation is
+
+~~~math
+\boxed{\text{integer state decides the path; }\Phi\text{ gives that state a geometric image}.}
+~~~
 
 ## 3. Rooms, progression and active wall geometry
 
