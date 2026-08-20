@@ -6,6 +6,12 @@ Slither Slide is a multi-room snake game built as a RIVES cartridge. Its twelve 
 4 x 3 arrangement inside one 1024 x 768 world, but the game does **not** represent that world
 with one universal tile map.
 
+> **Development model.** This is an AI-assisted C project. Cursor substantially assisted the
+> original implementation; Paolo De Marinis designed the mechanics and gameplay, selected and
+> configured the B-spline construction, wrote or modified parts of the code, and handled
+> integration, testing and validation. Since 2026, OpenAI Codex has assisted with repository
+> maintenance, refactoring, tests and documentation.
+
 The implementation separates the questions it has to answer:
 
 ~~~math
